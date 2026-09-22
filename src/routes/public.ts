@@ -24,6 +24,7 @@ import { RateLimitSignal } from './api';
 import { rateLimited } from '../core/http';
 import { payPage } from '../ui/pages/pay';
 import { landingPage } from '../ui/pages/landing';
+import { docsPage } from '../ui/pages/docs';
 import { serverErrorPage } from '../ui/layout';
 import type { InvoiceService } from '../services/invoices';
 
@@ -55,6 +56,20 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
       headers: { 'cache-control': 'public, max-age=300' },
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Documentation
+  // -------------------------------------------------------------------------
+  //
+  // Static content, cacheable, and reachable without an account: an integrator reads
+  // the reference before they have a key. Served on two paths because `/docs` is what
+  // the navigation links to and `/docs/api` is the older address that is already in
+  // bookmarks and in `robots.txt`.
+  const docs = (): Response =>
+    html(docsPage(), { headers: { 'cache-control': 'public, max-age=300' } });
+
+  app.get('/docs', docs);
+  app.get('/docs/api', docs);
 
   // -------------------------------------------------------------------------
   // Payment page

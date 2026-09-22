@@ -202,6 +202,42 @@ const MESSAGES: Record<string, { tone: 'success' | 'error' | 'info' | 'warn'; te
   no_sms_evidence: { tone: 'error', text: 'پیامک متناظر با این پرداخت پیدا نشد، بنابراین تأیید ممکن نیست.' },
   not_reviewable: { tone: 'error', text: 'این فاکتور در وضعیت بررسی دستی نیست.' },
   permission_denied: { tone: 'error', text: 'نقش شما اجازه این کار را ندارد.' },
+
+  // --- merchant dashboard -------------------------------------------------
+  card_created: { tone: 'success', text: 'کارت ثبت شد. اگر اولین کارت باشد، پیش‌فرض هم می‌شود.' },
+  card_updated: { tone: 'success', text: 'اطلاعات کارت ذخیره شد.' },
+  card_default: { tone: 'success', text: 'این کارت پیش‌فرض شد. فاکتورهای بعدی به آن می‌روند.' },
+  card_removed: { tone: 'success', text: 'کارت حذف شد.' },
+  card_deactivated: { tone: 'success', text: 'کارت غیرفعال شد و دیگر برای فاکتور تازه انتخاب نمی‌شود.' },
+  card_invalid: { tone: 'error', text: 'شماره کارت معتبر نیست. ۱۶ رقم و رقم کنترلی درست را بررسی کنید.' },
+  card_duplicate: { tone: 'error', text: 'این کارت قبلاً برای همین حساب ثبت شده است.' },
+  card_limit: { tone: 'error', text: 'تعداد کارت‌های ثبت‌شده به سقف رسیده است.' },
+  card_not_found: { tone: 'error', text: 'این کارت پیدا نشد.' },
+
+  key_created: { tone: 'success', text: 'کلید API ساخته شد. همین حالا کپی کنید؛ دوباره نشان داده نمی‌شود.' },
+  key_rotated: { tone: 'success', text: 'کلید تازه ساخته و کلید قبلی باطل شد. کلید زیر را همین حالا کپی کنید.' },
+  key_revoked: { tone: 'success', text: 'کلید باطل شد و از این لحظه کار نمی‌کند.' },
+  key_not_found: { tone: 'error', text: 'این کلید پیدا نشد.' },
+
+  webhook_created: { tone: 'success', text: 'آدرس وبهوک ثبت شد. راز امضا زیر فقط یک‌بار نشان داده می‌شود.' },
+  webhook_updated: { tone: 'success', text: 'تنظیمات وبهوک ذخیره شد.' },
+  webhook_deleted: { tone: 'success', text: 'آدرس وبهوک حذف شد. رویدادهای بعدی به آن نمی‌روند.' },
+  webhook_rotated: { tone: 'success', text: 'راز امضا عوض شد. راز قبلی از این لحظه نامعتبر است — سرور خود را به‌روز کنید.' },
+  webhook_test_sent: { tone: 'success', text: 'رویداد آزمایشی ساخته شد. نتیجه تحویل را در فهرست پایین ببینید.' },
+  webhook_url_invalid: { tone: 'error', text: 'آدرس وبهوک پذیرفته نشد: باید HTTPS باشد و به دامنه‌ای اشاره کند که مالکش هستید.' },
+  webhook_none: { tone: 'error', text: 'برای این حساب هیچ آدرس وبهوک فعالی ثبت نشده است.' },
+  webhook_not_found: { tone: 'error', text: 'این وبهوک پیدا نشد.' },
+  delivery_not_found: { tone: 'error', text: 'این تحویل پیدا نشد.' },
+
+  sms_token_created: { tone: 'success', text: 'توکن آزمایشی ساخته شد. یک ساعت اعتبار دارد.' },
+  settings_saved: { tone: 'success', text: 'تنظیمات ذخیره شد. از فاکتور بعدی اعمال می‌شود.' },
+  settings_invalid: { tone: 'error', text: 'یکی از مقادیر واردشده معتبر نیست.' },
+  profile_saved: { tone: 'success', text: 'پروفایل ذخیره شد.' },
+  invoice_cancelled: { tone: 'success', text: 'فاکتور لغو شد و مبلغش آزاد گردید.' },
+  invoice_not_cancellable: { tone: 'error', text: 'این فاکتور در وضعیتی نیست که بتوان لغوش کرد.' },
+  invoice_not_found: { tone: 'error', text: 'این فاکتور پیدا نشد.' },
+  notifications_read: { tone: 'success', text: 'اطلاعیه‌ها خوانده‌شده شدند.' },
+  form_invalid: { tone: 'error', text: 'فرم کامل یا درست پر نشده است.' },
 };
 
 export function messageFor(code: string | undefined): { tone: 'success' | 'error' | 'info' | 'warn'; text: string } | null {

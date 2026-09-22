@@ -295,6 +295,23 @@ export class SettingsService {
       [merchantUserId, key, value, type, nowIso()],
     );
   }
+
+  /**
+   * Removes a merchant override so the key falls back to the platform default.
+   *
+   * This exists because the alternative is a real bug: `setMerchant(key, '')` is not
+   * "unset", it is "set to the empty string", and every reader has to decide what that
+   * means. For `invoices.gateway_fee` in particular, `Number('')` is `0`, which is a
+   * perfectly valid fee — so a merchant clearing the fee field to go back to the platform
+   * default would instead have silently set their own fee to zero. Setting a value and
+   * clearing a value are two different operations and now look like two different calls.
+   */
+  async clearMerchant(merchantUserId: string, key: string): Promise<void> {
+    await run(this.db, 'DELETE FROM merchant_settings WHERE merchant_user_id = ? AND key = ?', [
+      merchantUserId,
+      key,
+    ]);
+  }
 }
 
 function inferType(key: string): SettingType {

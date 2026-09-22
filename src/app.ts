@@ -26,23 +26,26 @@ import { serverErrorPage } from './ui/pages/errors';
  *
  * Mounted here in the order a request is most likely to need them:
  *
- *   ./routes/public    /, /pay/:invoiceId, /pay/:invoiceId/success, /status/:invoiceId
- *   ./routes/auth      /register, /login, /logout
- *   ./routes/api       /api/v1/payments, /cards, /status, /wallet, /transactions/count
- *   ./routes/sms       POST /sms
+ *   ./routes/public     /, /docs, /pay/:invoiceId, /status/:invoiceId, /robots.txt
+ *   ./routes/auth       /register, /login, /logout
+ *   ./routes/dashboard  /dashboard/*   (merchant console)
+ *   ./routes/admin      /admin/*       (operator console)
+ *   ./routes/api        /api/v1/payments, /cards, /status, /wallet, /transactions/count
+ *   ./routes/sms        POST /sms
  *
- * Not yet mounted, and named so the gap is visible rather than surprising:
+ * Not yet mounted, named so the gap stays visible rather than surprising:
  *
- *   ./routes/merchant  /dashboard/*      (services and UI components exist)
- *   ./routes/telegram  /telegram/webhook (TelegramService.registerWebhook exists)
- *   ./routes/docs      /docs/api         (documentation, not yet written)
+ *   ./routes/telegram   /telegram/webhook (TelegramService.registerWebhook exists)
  *
- * Mounted, listed above: ./routes/admin serves /admin/* — merchant approval and the
- * manual-review queue both live there, and both are load-bearing.
+ * The two consoles are both load-bearing, in different directions: approving a merchant
+ * is the only path out of `PENDING_APPROVAL`, and deciding a `MANUAL_REVIEW` payment is
+ * the only path out of that state — while the dashboard is the only way a merchant can
+ * register a receiving card, which is a precondition for creating an invoice at all.
  */
 
 import { registerPublicRoutes } from './routes/public';
 import { registerAuthRoutes } from './routes/auth';
+import { registerDashboardRoutes } from './routes/dashboard';
 import { registerApiRoutes } from './routes/api';
 import { registerSmsRoutes } from './routes/sms';
 import { registerAdminRoutes } from './routes/admin';
@@ -234,6 +237,7 @@ export function createApp(appContext?: Partial<AppContext>): Hono<AppEnv> {
   // ---------------------------------------------------------------------------
   registerPublicRoutes(app);
   registerAuthRoutes(app);
+  registerDashboardRoutes(app);
   registerApiRoutes(app);
   registerSmsRoutes(app);
   registerAdminRoutes(app);

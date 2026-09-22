@@ -19,6 +19,7 @@ import { env, SELF, createExecutionContext } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
 import { servicesFor, type ServiceContext } from '../src/routes/container';
+import { ReportingService } from '../src/services/reporting';
 import { createLogger } from '../src/obs/logger';
 import { resolveConfig } from '../src/env';
 import { id as newId } from '../src/core/ids';
@@ -408,6 +409,35 @@ describe('Steve Pay end-to-end flow (§78)', () => {
     expect(transaction?.amount).toBe(createdBody.amount);
     expect(transaction?.bank_reference).toBe(reference);
     expect(transaction?.is_test).toBe(0);
+
+    // -----------------------------------------------------------------------
+    // 10b. The fee earned by that payment is visible to the platform (§31).
+    //
+    //      Regression guard. Fee revenue was summed from `wallet_ledger`, but the default
+    //      `CUSTOMER` fee mode is paid by the payer on top of the amount, so no wallet is
+    //      debited and no ledger row is written — the console reported zero revenue on a day
+    //      when every payment earned a fee. The invoice is the record that is complete.
+    // -----------------------------------------------------------------------
+    const invoiceMoney = await env.DB.prepare(
+      'SELECT settled_fee, fee_mode FROM invoices WHERE id = ?',
+    )
+      .bind(invoiceId)
+      .first<{ settled_fee: number | null; fee_mode: string }>();
+
+    expect(invoiceMoney?.fee_mode).toBe('CUSTOMER');
+    expect(invoiceMoney?.settled_fee ?? 0).toBeGreaterThan(0);
+
+    const ledgerFeeRows = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM wallet_ledger WHERE type = 'PAYMENT_FEE' AND reference = ? AND reference_type = 'invoice'",
+    )
+      .bind(invoiceId)
+      .first<{ n: number }>();
+    // The wallet really was untouched — this is what made the ledger blind to the revenue.
+    expect(ledgerFeeRows?.n).toBe(0);
+
+    const revenue = await new ReportingService(env.DB).revenueSummary();
+    expect(revenue.feesTotal).toBeGreaterThanOrEqual(invoiceMoney?.settled_fee ?? 0);
+    expect(revenue.paidTotal).toBeGreaterThanOrEqual(1);
 
     const auditEvents = await env.DB.prepare(
       "SELECT DISTINCT event FROM audit_logs WHERE merchant_user_id = ? ORDER BY event",

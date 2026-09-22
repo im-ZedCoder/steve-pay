@@ -87,6 +87,32 @@ what the merchant agreed to, whereas a floor can only ever under-charge by less 
 
 ---
 
+## Two records of money, each answering one question
+
+An invoice with `fee_mode = 'CUSTOMER'` — the default, and the one the brief describes — is paid by
+the payer *on top of* the amount. No wallet is debited, so no `PAYMENT_FEE` row is ever written.
+That makes `wallet_ledger` structurally unable to answer "what did this payment earn", however
+carefully it is queried. With `fee_mode = 'MERCHANT'` the fee is recovered from the wallet instead,
+and the ledger does have a row.
+
+So revenue and volume are read from the paid invoice, and only wallet movements come from the
+ledger:
+
+| Question | Source | Why |
+| --- | --- | --- |
+| Revenue, volume, paid counts | `invoices` (`settled_fee`, `net_amount`) | Written in the same statement that sets `status = 'PAID'`, so it is complete for both fee modes |
+| Top-ups, balances owed to merchants | `wallet_ledger` | A wallet movement exists nowhere else |
+
+`ReportingService.revenueSummary` is the single definition of the first row, and `adminOverview`
+delegates to it, so the overview and the revenue page cannot disagree about the same day's takings.
+
+One consequence is worth naming, because it makes a correct fee engine look broken: `settled_fee` is
+the platform's *take*, not the published fee. A uniquely-suffixed amount leaves a remainder, and by
+default the platform keeps it — so ten payments at a 3,000 Toman fee can recognise well over 30,000.
+The revenue screen therefore says «درآمد» and names the composition rather than saying «کارمزد».
+
+---
+
 ## Confirmation and notification are separate
 
 ```
@@ -283,24 +309,24 @@ the test suite could not run against the same runtime configuration production u
 
 Stated plainly rather than left to be discovered:
 
-- **`/dashboard/*` is not mounted.** The services, permissions and UI components exist; the
-  request/render layer does not. Until it is, a merchant cannot change their own settings, cards
-  or callbacks without an operator doing it through the console.
 - **The admin console does not cover every section of the brief.** Mounted: overview, revenue,
   merchants and their lifecycle actions, wallet adjustment, the manual-review queue, invoices, and
   the audit log. Not yet built: `/admin/transactions`, `/admin/wallets`, `/admin/tickets`,
   `/admin/notifications`, `/admin/webhooks`, `/admin/sms`, `/admin/settings`, `/admin/system-health`.
   The services behind all of them exist and are tested at the service layer; only the pages are
   missing, and the console's navigation deliberately links to nothing that is not built.
-- **The setup wizard and full-pipeline test have no HTTP surface.** `MerchantService.setupProgress`
-  and `SmsService.issueTestToken` exist.
-- **`/docs/api` is written here, not served.** There is no rendered documentation page.
+- **The merchant dashboard covers the account, not the whole brief.** Mounted: overview with a
+  setup checklist, payments, payment detail, cards, API keys, the callback endpoint, fee mode,
+  the SMS test token, notifications and the wallet ledger. Still missing: a merchant-side webhook
+  delivery log, tickets, and self-service settlement reports.
+- **The full-pipeline test has no HTTP surface.** `SmsService.issueTestToken` is reachable from
+  the dashboard; the end-to-end pipeline run is service-layer only.
 - **Telegram ownership verification** needs the webhook route mounted to complete the flow.
 - **No percentage fee in the MVP**, though `percentageBasisPoints` is wired through the fee engine
   and tested.
 - **Reports are read-only and queried live.** `ReportingService` runs indexed aggregates
   per request rather than reading a rollup table. That is the right trade at this volume — a rollup
-  is one more thing that can silently disagree with the ledger — but it is the first thing to change
+  is one more thing that can silently disagree with its source table — but it is the first thing to change
   if the dashboard pages start showing up in slow-query logs.
 - **CSV export is not implemented**, though `reports:export` is a permission and the report
   queries already return flat rows.

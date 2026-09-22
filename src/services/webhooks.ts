@@ -236,10 +236,20 @@ export class WebhookService {
           .bind(timestamp, merchantUserId),
       );
     }
+
+    // Switching an endpoint back on also clears an automatic shutdown.
+    //
+    // `enqueue` skips any endpoint with `disabled_at` set, so a plain `is_active = 1` on an
+    // endpoint that was shut down after repeated failures would write a column that nothing
+    // reads — the button would appear to re-enable delivery and nothing would be delivered.
+    // Clearing the shutdown is a deliberate act by the person who fixed the receiver, which is
+    // exactly who is pressing this button, so the failure counter starts over too.
+    const reactivating = patch.isActive === true;
     statements.push(
       this.db
         .prepare(
-          `UPDATE webhook_endpoints SET url = ?, events = ?, description = ?, is_active = ?, is_default = ?, updated_at = ?
+          `UPDATE webhook_endpoints SET url = ?, events = ?, description = ?, is_active = ?, is_default = ?,
+             disabled_at = ?, disabled_reason = ?, consecutive_failures = ?, updated_at = ?
            WHERE id = ? AND merchant_user_id = ?`,
         )
         .bind(
@@ -248,6 +258,9 @@ export class WebhookService {
           patch.description === undefined ? row.description : patch.description,
           patch.isActive === undefined ? row.is_active : patch.isActive ? 1 : 0,
           patch.isDefault === undefined ? row.is_default : patch.isDefault ? 1 : 0,
+          reactivating ? null : row.disabled_at,
+          reactivating ? null : row.disabled_reason,
+          reactivating ? 0 : row.consecutive_failures,
           timestamp,
           endpointId,
           merchantUserId,

@@ -29,14 +29,14 @@ import type { Hono } from 'hono';
 import type { AppEnv, RouteContext } from '../app';
 import { escapeHtml, html, redirect } from '../core/http';
 import { toPersianDigits } from '../core/digits';
-import { formatJalaliDateTime, formatRelativeFa } from '../core/time';
+import { formatJalaliDate, formatJalaliDateTime, formatRelativeFa } from '../core/time';
 import { formatTomanFa, parseTomanInput } from '../core/money';
 import { INVOICE_STATUSES, type InvoiceStatus } from '../core/state-machine';
 import { hasPermission, type Permission, type Role } from '../core/roles';
 import { AppError } from '../core/errors';
 import { CSRF_FIELD } from '../core/csrf';
 import { requirePermission, readForm, csrfForGet, withCsrfCookie, messageFor } from './session';
-import { adminShell, alert, badge, barChart, emptyState, ident, panel, stat } from '../ui/layout';
+import { adminShell, alert, badge, emptyState, ident, panel, sparkline, stat } from '../ui/layout';
 import { ReportingService } from '../services/reporting';
 import { confirmPayment } from '../services/confirm';
 import { announceConfirmedPayment } from '../services/payment-events';
@@ -185,7 +185,7 @@ async function overviewPage(c: RouteContext): Promise<Response> {
 
       return `${reviewBanner}
 <div class="grid-4">
-${stat({ label: 'کارمزد امروز', value: toman(overview.money.feesToday), unit: 'تومان', sub: 'درآمد درگاه' })}
+${stat({ label: 'درآمد امروز', value: toman(overview.money.feesToday), unit: 'تومان', sub: 'کارمزد و باقی‌مانده' })}
 ${stat({ label: 'حجم تأییدشده امروز', value: toman(overview.money.volumeToday), unit: 'تومان', sub: 'پرداخت‌های موفق' })}
 ${stat({ label: 'فاکتور امروز', value: toPersianDigits(overview.invoices.today), sub: `${toPersianDigits(overview.invoices.paidToday)} پرداخت‌شده` })}
 ${stat({
@@ -208,7 +208,25 @@ ${stat({ label: 'فاکتور معلق', value: toPersianDigits(overview.invoice
 </div>
 
 <div class="grid-2" style="margin-top:1rem">
-${panel('کارمزد ۱۴ روز گذشته', barChart(feesByDay.map((point) => ({ label: point.day.slice(5), value: point.amount }))))}
+${panel(
+  'درآمد ۱۴ روز گذشته',
+  (() => {
+    // The overview answers "what shape was the fortnight"; exact daily figures live on the
+    // revenue screen. A row per day here would be fourteen lines of zero that bury the two
+    // numbers worth reading.
+    const days = feesByDay.filter((point) => point.amount > 0);
+    const best = days.reduce<{ day: string; amount: number } | null>(
+      (top, point) => (top === null || point.amount > top.amount ? point : top),
+      null,
+    );
+    return `<div class="stack" style="gap:.9rem">
+${sparkline(feesByDay.map((point) => ({ label: formatJalaliDate(point.day), value: point.amount })))}
+${row('روزهای دارای درآمد', `${toPersianDigits(days.length)} از ${toPersianDigits(feesByDay.length)}`)}
+${best ? row('بیشترین روز', `${toman(best.amount)} تومان · ${formatJalaliDate(best.day)}`) : row('داده‌ای نیست', 'هنوز درآمدی ثبت نشده')}
+<a class="btn" href="/admin/revenue" style="align-self:flex-start;margin-top:.2rem">گزارش کامل درآمد</a>
+</div>`;
+  })(),
+)}
 ${panel(
   'سلامت زنجیره پرداخت',
   `<div class="stack" style="gap:.6rem">
@@ -225,14 +243,16 @@ ${row('فاکتور منقضی', toPersianDigits(overview.invoices.expired))}
 ${panel(
   'دفتر کل پلتفرم',
   `<div class="stack" style="gap:.6rem">
-${row('کارمزد کل', `${toman(overview.money.feesTotal)} تومان`)}
+${row('درآمد پلتفرم', `${toman(overview.money.feesTotal)} تومان`)}
 ${row('حجم تأییدشده کل', `${toman(overview.money.volumeTotal)} تومان`)}
 ${row('کل شارژ کیف پول‌ها', `${toman(overview.money.depositsTotal)} تومان`)}
 ${row('موجودی نزد پلتفرم', `${toman(overview.money.walletsHeld)} تومان`, 'amber')}
 </div>
 <p class="hint" style="margin-top:.75rem;font-size:.72rem;color:var(--faint);line-height:1.9">
-ارقام از دفتر کل خوانده می‌شوند، نه از فاکتورها. دفتر کل ثبت می‌کند چه چیزی واقعاً جابه‌جا شد؛
-فاکتور فقط ثبت می‌کند چه چیزی خواسته شده بود. «موجودی نزد پلتفرم» همان مبلغی است که پلتفرم به پذیرندگان بدهکار است.
+کارمزد و حجم از فاکتورهای تسویه‌شده خوانده می‌شوند: کارمزد روی هر فاکتور، در همان لحظه تأیید پرداخت ثبت می‌شود.
+شارژ کیف پول و موجودی از دفتر کل خوانده می‌شوند، چون آن‌ها فقط در کیف پول وجود دارند.
+در پرداخت‌هایی که کارمزد را مشتری می‌پردازد هیچ کیف پولی لمس نمی‌شود، پس دفتر کل نمی‌تواند کارمزد را نشان دهد.
+«موجودی نزد پلتفرم» همان مبلغی است که پلتفرم به پذیرندگان بدهکار است.
 </p>`,
 )}
 ${panel('گزارش تفصیلی', emptyState({
@@ -323,7 +343,7 @@ async function usersPage(c: RouteContext): Promise<Response> {
       path: '/admin/users',
       permission: 'merchants:read',
       actions: `<form method="get" action="/admin/users" style="display:flex;gap:.4rem">
-<input class="input" name="q" value="${escapeHtml(search)}" placeholder="موبایل، کد پذیرنده یا نام" style="min-width:14rem">
+<input class="input" name="q" value="${escapeHtml(search)}" placeholder="موبایل، کد پذیرنده یا نام" style="flex:1 1 14rem;min-width:0">
 ${status ? `<input type="hidden" name="status" value="${escapeHtml(status)}">` : ''}
 <button class="btn" type="submit">جست‌وجو</button>
 </form>`,
@@ -636,7 +656,7 @@ ${csrf}
 </form>`
     : ''
 }
-<form method="post" action="/admin/review/${encodeURIComponent(invoice.id)}/reject" style="display:flex;gap:.4rem;flex:1;min-width:18rem">
+<form method="post" action="/admin/review/${encodeURIComponent(invoice.id)}/reject" style="display:flex;gap:.4rem;flex:1 1 18rem;min-width:0">
 ${csrf}
 <input class="input" name="reason" required minlength="3" maxlength="300" placeholder="دلیل رد (در گزارش رویدادها ثبت می‌شود)">
 <button class="btn" type="submit">رد پرداخت</button>
@@ -644,7 +664,7 @@ ${csrf}
 </div>`;
 
           return panel(
-            `فاکتور <span class="mono" style="font-size:.78rem">${escapeHtml(invoice.id)}</span>`,
+            { html: `فاکتور <span class="mono" style="font-size:.78rem">${escapeHtml(invoice.id)}</span>` },
             `<div class="grid-2" style="gap:1rem"><div>${facts}</div><div>${proofPanel}</div></div>${decision}`,
             `<span style="font-size:.75rem;color:var(--faint)">${escapeHtml(formatRelativeFa(invoice.created_at))}</span>`,
           );
@@ -677,16 +697,61 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
       {
         title: 'درآمد',
         heading: 'درآمد درگاه',
-        subheading: 'کارمزد، بر پایه دفتر کل کیف پول‌ها',
+        subheading: 'سهم پلتفرم از پرداخت‌های تسویه‌شده: کارمزد و باقی‌مانده مبلغ یکتا',
         path: '/admin/revenue',
         permission: 'reports:read',
       },
       async () => {
         const reporting = new ReportingService(c.get('appContext').env.DB);
-        const [byMerchant, byDay] = await Promise.all([
+        const [summary, byMerchant, byDay] = await Promise.all([
+          reporting.revenueSummary(),
           reporting.revenueByMerchant(50),
           reporting.feesByDay(30),
         ]);
+
+        // The headline is the reason an operator opens this page, so it goes first; the
+        // chart below it answers "what shape was the month", not "how much did we earn".
+        const headline = `<div class="grid-4">
+${stat({ label: 'درآمد کل', value: toman(summary.feesTotal), unit: 'تومان', sub: `از ${toPersianDigits(summary.paidTotal)} پرداخت تأییدشده` })}
+${stat({ label: 'درآمد امروز', value: toman(summary.feesToday), unit: 'تومان', sub: 'از آغاز روز به وقت تهران' })}
+${stat({ label: 'حجم تأییدشده کل', value: toman(summary.volumeTotal), unit: 'تومان', sub: 'مبلغ تسویه‌شده به پذیرندگان' })}
+${stat({ label: 'پرداخت امروز', value: toPersianDigits(summary.paidToday), sub: `کل ${toPersianDigits(summary.paidTotal)} پرداخت` })}
+</div>`;
+
+        const earning = byDay.filter((point) => point.amount > 0);
+        const peak = earning.reduce<{ day: string; amount: number } | null>(
+          (best, point) => (best === null || point.amount > best.amount ? point : best),
+          null,
+        );
+
+        // The sparkline carries the shape and nothing else, so the scale goes in a caption.
+        // A bare column chart with no axis makes a quiet month and a busy one look identical.
+        const shape = `<div class="stack" style="gap:.9rem">
+${sparkline(byDay.map((point) => ({ label: formatJalaliDate(point.day), value: point.amount })))}
+${row('روزهای دارای درآمد', `${toPersianDigits(earning.length)} از ${toPersianDigits(byDay.length)}`)}
+${peak ? row('بیشترین روز', `${toman(peak.amount)} تومان · ${formatJalaliDate(peak.day)}`) : ''}
+</div>`;
+
+        // Only days that earned something get a row. Thirty rows of zero is a list of the
+        // calendar, not of the revenue, and it buries the handful of days that matter.
+        const dayTable =
+          earning.length === 0
+            ? emptyState({
+                title: 'در ۳۰ روز گذشته کارمزدی ثبت نشده',
+                body: 'کارمزد روی هر پرداخت تأییدشده ثبت می‌شود. تا وقتی پرداختی تأیید نشود، این جدول خالی می‌ماند.',
+              })
+            : `<div class="table-wrap"><table><thead><tr><th>روز</th><th>درآمد</th><th>پرداخت</th></tr></thead><tbody>
+${[...earning]
+  .reverse()
+  .map(
+    (point) => `<tr>
+<td>${escapeHtml(formatJalaliDate(point.day))}</td>
+<td class="num">${escapeHtml(toman(point.amount))}</td>
+<td class="num">${toPersianDigits(point.count)}</td>
+</tr>`,
+  )
+  .join('')}
+</tbody></table></div>`;
 
         const table =
           byMerchant.length === 0
@@ -694,7 +759,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
                 title: 'درآمدی ثبت نشده',
                 body: 'هنوز کارمزدی از هیچ پذیرنده‌ای دریافت نشده است. کارمزد فقط روی پرداخت تأییدشده ثبت می‌شود.',
               })
-            : `<div class="table-wrap"><table><thead><tr><th>پذیرنده</th><th>کد</th><th>کارمزد</th><th>حجم تأییدشده</th><th>پرداخت موفق</th></tr></thead><tbody>
+            : `<div class="table-wrap"><table><thead><tr><th>پذیرنده</th><th>کد</th><th>درآمد پلتفرم</th><th>حجم تأییدشده</th><th>پرداخت موفق</th></tr></thead><tbody>
 ${byMerchant
   .map(
     (merchant) => `<tr>
@@ -708,7 +773,11 @@ ${byMerchant
   .join('')}
 </tbody></table></div>`;
 
-        return `${panel('کارمزد ۳۰ روز گذشته', barChart(byDay.map((point) => ({ label: point.day.slice(5), value: point.amount }))))}
+        return `${headline}
+<div class="grid-2" style="margin-top:1rem">
+${panel('درآمد ۳۰ روز گذشته', shape)}
+${panel('روزهای دارای درآمد', dayTable)}
+</div>
 <div style="margin-top:1rem">${panel('کارمزد به تفکیک پذیرنده', table)}</div>`;
       },
     ),
@@ -726,7 +795,7 @@ ${byMerchant
         path: '/admin/invoices',
         permission: 'invoices:read',
         actions: `<form method="get" action="/admin/invoices" style="display:flex;gap:.4rem">
-<input class="input" name="q" value="${escapeHtml(new URL(c.req.url).searchParams.get('q') ?? '')}" placeholder="شناسه، مبلغ یا موبایل" style="min-width:14rem">
+<input class="input" name="q" value="${escapeHtml(new URL(c.req.url).searchParams.get('q') ?? '')}" placeholder="شناسه، مبلغ یا موبایل" style="flex:1 1 14rem;min-width:0">
 <button class="btn" type="submit">جست‌وجو</button>
 </form>`,
       },
@@ -1046,7 +1115,7 @@ ${row('محیط', key.view.environment)}
         }
 
         const filterBar = `<form method="get" action="/admin/audit-logs" style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem">
-<select class="input" name="event" style="min-width:15rem">
+<select class="input" name="event" style="flex:1 1 15rem;min-width:0">
 <option value="">همه رویدادها</option>
 ${[...grouped.entries()]
   .map(

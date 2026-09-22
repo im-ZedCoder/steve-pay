@@ -147,6 +147,22 @@ The full API key is returned **exactly once**, at creation. It cannot be recover
 - PII is minimised: card numbers are the merchant's own receiving cards, which are public by
   necessity, with `number_hash` for duplicate detection so hashes are never exposed.
 
+### The key prefix collides with Stripe's
+
+Steve Pay keys are `sk_live_` followed by a 12-character id and a 32-character secret. That is
+`sk_live_` + 44 base62 characters, which is **byte-for-byte the shape of a Stripe secret key**, and
+GitHub's secret scanning matches it as one. Two consequences worth knowing before either surprises
+someone:
+
+- **Documentation and fixtures must never contain a realistic key.** A placeholder of 24 or more
+alphanumeric characters after the prefix trips push protection — a documentation example was rejected
+by exactly this, and the fix is a bracketed placeholder (`sk_live_<key-id><secret>`), not a shorter
+fake. `tests/acceptance.test.ts` uses `sk_live_totally-made-up` for the same reason.
+- **A merchant who commits a real key gets it reported as a Stripe key.** The key is still invalidated
+correctly by key rotation, so the exposure is a confusing report rather than a missed leak — but if
+that confusion ever costs real time, changing the prefix to something unclaimed (for example
+`sp_live_`) is a one-line change in `generateApiKey` plus a migration for stored `lookup_id`s.
+
 ### Replay
 
 - **Inbound**: `Idempotency-Key` (24-hour window), SMS message hash, bank reference.

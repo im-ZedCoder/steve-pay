@@ -163,7 +163,16 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
     const admin = c.req.query('scope') === 'admin';
     const csrf = await issueCsrf(context.config.isProduction);
 
-    const response = html(addCsrf(loginPage({ admin, next: c.req.query('next') ?? null }), csrf.token), {
+    // `next` is validated here as well as on POST.
+    //
+    // The POST already runs it through `safeNext` before redirecting, so a hostile value was
+    // never followed — but it was *rendered*, so `/login?next=https://evil.example.com` put an
+    // attacker's URL inside the form on our own login page. Escaping made it harmless and it
+    // still looked like a real destination to anyone reading the page. Validating once at the
+    // input boundary means the string only exists in a form the page itself built.
+    const next = safeNext(c.req.query('next') ?? '');
+
+    const response = html(addCsrf(loginPage({ admin, next }), csrf.token), {
       noStore: true,
     });
     response.headers.append('set-cookie', csrf.cookie);

@@ -160,6 +160,98 @@ function createMockApi() {
 // ---------------------------------------------------------------------------
 
 /**
+ * The config the fixture starts from.
+ *
+ * Synthetic, and deliberately not a copy of the repository's `wrangler.jsonc`. That copy was
+ * the first version of this fixture and it was wrong in a way worth recording: the test only
+ * passed while the repository was *unprovisioned*. The moment someone ran `cf:setup` for real,
+ * the placeholders in `wrangler.jsonc` were legitimately gone, so the patch had nothing to
+ * replace and eight assertions failed — a test that breaks precisely when the thing it tests
+ * has been used successfully.
+ *
+ * The fixture is therefore a canonical file with the placeholders where the script expects
+ * them: two production ids (top level and `env.production`, which must both end up pointing at
+ * the same database) and one of each staging id. That makes the result independent of the
+ * developer's Cloudflare account, which is the only way this test can mean the same thing on
+ * every machine.
+ */
+const FIXTURE_CONFIG = `{
+  // Steve Pay — Cloudflare Worker deployment configuration.
+  // A comment the patch must not disturb: ids are replaced as text, not by re-serialising.
+  "name": "steve-pay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "workers_dev": false,
+  "assets": { "directory": "public", "binding": "ASSETS" },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "steve-pay",
+      "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  "kv_namespaces": [
+    { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
+  ],
+
+  "queues": {
+    "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
+    "consumers": [
+      {
+        "queue": "steve-pay-webhooks",
+        "dead_letter_queue": "steve-pay-webhooks-dlq",
+      },
+    ],
+  },
+
+  "vars": { "ENVIRONMENT": "development", "TURNSTILE_SITE_KEY": "" },
+
+  "env": {
+    "staging": {
+      "name": "steve-pay-staging",
+      "workers_dev": true,
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "BASE_URL": "https://steve-pay-staging.<your-subdomain>.workers.dev",
+        "TURNSTILE_SITE_KEY": "",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "steve-pay-staging",
+          "database_id": "REPLACE_WITH_STAGING_D1_ID",
+        },
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "REPLACE_WITH_STAGING_KV_ID" },
+      ],
+    },
+    "production": {
+      "name": "steve-pay",
+      "routes": [
+        { "pattern": "steve-pay.ir", "custom_domain": true },
+        { "pattern": "www.steve-pay.ir", "custom_domain": true },
+      ],
+      "vars": { "ENVIRONMENT": "production" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "steve-pay",
+          "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+        },
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
+      ],
+    },
+  },
+}
+`;
+
+/**
  * A throwaway copy of the project holding only what the script reads.
  *
  * A copy rather than the real tree, because the `config` phase rewrites `wrangler.jsonc` and
@@ -174,11 +266,7 @@ function makeFixture() {
     '-- placeholder for the fixture\nSELECT 1;\n',
     'utf8',
   );
-  writeFileSync(
-    join(directory, 'wrangler.jsonc'),
-    readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8'),
-    'utf8',
-  );
+  writeFileSync(join(directory, 'wrangler.jsonc'), FIXTURE_CONFIG, 'utf8');
 
   // The fixture needs its own copy of the script, because the script derives its project
   // root from its own file location rather than from the working directory. Running the
@@ -254,6 +342,11 @@ async function main() {
   // repository's copy of the script again, this fails loudly instead of leaving mock ids in
   // a real config file that someone might then commit.
   const realConfigBefore = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8');
+
+  // Read from the repository, not the fixture. A real `cf:setup` run legitimately leaves a
+  // secrets file here, so the assertion has to be "this test added one", not "none exists".
+  const realSecretsPath = join(ROOT, '.cloudflare.secrets.production.json');
+  const realSecretsBefore = existsSync(realSecretsPath);
 
   try {
     // -----------------------------------------------------------------------
@@ -426,9 +519,11 @@ async function main() {
       'the fixture ran the wrong copy of the script — see makeFixture()',
     );
     check(
-      'no secrets file was left in the repository',
-      !existsSync(join(ROOT, '.cloudflare.secrets.production.json')) || secretsBefore,
+      'the test added no secrets file to the repository',
+      existsSync(realSecretsPath) === realSecretsBefore,
+      'a file appeared in the repository root that this test did not create',
     );
+    void secretsBefore;
   } finally {
     rmSync(directory, { recursive: true, force: true });
     await new Promise((resolve) => mock.server.close(resolve));

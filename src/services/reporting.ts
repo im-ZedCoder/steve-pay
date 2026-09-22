@@ -7,9 +7,19 @@
  * one more thing that can silently disagree with the ledger. If the volume ever justifies
  * pre-aggregation, the cron rollups are the place to add it.
  *
- * Money is summed from `wallet_ledger`, never from invoices. The ledger is the record of
- * what actually moved; invoices record what was *intended*. When the two disagree, the
- * ledger is right and the revenue figure should say so.
+ * Money comes from two sources, and each has exactly one job:
+ *
+ *   - `wallet_ledger` answers "what moved through a wallet" — top-ups, and the balances the
+ *     platform holds on merchants' behalf. A wallet is the only place those appear.
+ *   - `invoices` answers "what did a payment earn". Fees and volume are settled onto the
+ *     invoice the moment it is paid, in the same statement that sets `status = 'PAID'`, so
+ *     `settled_fee` and `net_amount` are complete for every paid invoice.
+ *
+ * This split is not stylistic. An invoice with `fee_mode = 'CUSTOMER'` — the default — is
+ * paid by the payer on top of the amount, so no wallet is ever debited and no `PAYMENT_FEE`
+ * ledger row is ever written. Reading fee revenue from the ledger therefore reports zero on
+ * a day when every payment earned a fee. The ledger is authoritative about wallets and
+ * structurally blind to fees; neither table can answer both questions.
  *
  * "Today" is always a Tehran day (§ time.ts). An operator in Tehran reading a dashboard at
  * 00:30 must not see yesterday's numbers, which is exactly what a UTC boundary would show.
@@ -36,10 +46,14 @@ export interface AdminOverview {
     manualReview: number;
   };
   money: {
-    /** Gateway fees actually collected, all time. */
+    /**
+     * Platform revenue recognised on paid invoices, all time — the gateway fee plus the
+     * unique-amount remainder where the platform keeps it. `settled_fee` is exactly this,
+     * so the figure is the platform's take rather than the fee schedule times the volume.
+     */
     feesTotal: Toman;
     feesToday: Toman;
-    /** Value of confirmed payments, all time. */
+    /** Value of confirmed payments, all time. From paid invoices. */
     volumeTotal: Toman;
     volumeToday: Toman;
     /** Net credit from merchants topping up, all time. */
@@ -67,6 +81,59 @@ export class ReportingService {
   }
 
   /**
+   * Platform revenue, payment volume and paid-invoice counts — the numbers a revenue screen
+   * is actually about — in one query against `invoices`.
+   *
+   * "Revenue" here is `settled_fee`, which is the platform's recognised take, not the fee
+   * schedule multiplied by the payment count: a uniquely-suffixed amount leaves a remainder
+   * that belongs to the platform by default. Labelling it "fees" would make a correct fee
+   * engine look broken to anyone checking it against the published rate.
+   *
+   * `adminOverview` reads its money figures from here rather than issuing its own queries, so
+   * the landing page and the revenue page cannot disagree about the same day's takings.
+   */
+  async revenueSummary(): Promise<{
+    feesTotal: Toman;
+    feesToday: Toman;
+    volumeTotal: Toman;
+    volumeToday: Toman;
+    paidTotal: number;
+    paidToday: number;
+  }> {
+    const dayStart = startOfTehranDay(new Date());
+
+    const row = await first<{
+      fees_total: number | null;
+      fees_today: number | null;
+      volume_total: number | null;
+      volume_today: number | null;
+      paid_total: number;
+      paid_today: number;
+    }>(
+      this.db,
+      `SELECT
+         (SELECT COALESCE(SUM(settled_fee), 0) FROM invoices WHERE status = 'PAID') AS fees_total,
+         (SELECT COALESCE(SUM(settled_fee), 0) FROM invoices
+           WHERE status = 'PAID' AND paid_at >= ?) AS fees_today,
+         (SELECT COALESCE(SUM(net_amount), 0) FROM invoices WHERE status = 'PAID') AS volume_total,
+         (SELECT COALESCE(SUM(net_amount), 0) FROM invoices
+           WHERE status = 'PAID' AND paid_at >= ?) AS volume_today,
+         (SELECT COUNT(*) FROM invoices WHERE status = 'PAID') AS paid_total,
+         (SELECT COUNT(*) FROM invoices WHERE status = 'PAID' AND paid_at >= ?) AS paid_today`,
+      [dayStart, dayStart, dayStart],
+    );
+
+    return {
+      feesTotal: row?.fees_total ?? 0,
+      feesToday: row?.fees_today ?? 0,
+      volumeTotal: row?.volume_total ?? 0,
+      volumeToday: row?.volume_today ?? 0,
+      paidTotal: row?.paid_total ?? 0,
+      paidToday: row?.paid_today ?? 0,
+    };
+  }
+
+  /**
    * Everything the admin landing page shows, in one pass.
    *
    * Deliberately one method rather than a dozen: the overview page needs all of it, and
@@ -79,10 +146,7 @@ export class ReportingService {
     const [
       merchantStatus,
       invoiceCounts,
-      feesTotal,
-      feesToday,
-      volume,
-      volumeToday,
+      revenue,
       deposits,
       walletsHeld,
       webhooks,
@@ -103,29 +167,11 @@ export class ReportingService {
         `SELECT
            (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) AS today,
            (SELECT COUNT(*) FROM invoices WHERE status IN ('CREATED','PENDING','PAYMENT_DETECTED','CONFIRMING')) AS pending,
-           (SELECT COUNT(*) FROM invoices WHERE status = 'PAID' AND paid_at >= ?) AS paid_today,
            (SELECT COUNT(*) FROM invoices WHERE status = 'EXPIRED') AS expired,
            (SELECT COUNT(*) FROM invoices WHERE status = 'MANUAL_REVIEW') AS manual_review`,
-        [dayStart, dayStart],
-      ),
-      first<{ total: number }>(
-        this.db,
-        "SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_ledger WHERE type = 'PAYMENT_FEE'",
-      ),
-      first<{ total: number }>(
-        this.db,
-        "SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_ledger WHERE type = 'PAYMENT_FEE' AND created_at >= ?",
         [dayStart],
       ),
-      first<{ total: number }>(
-        this.db,
-        "SELECT COALESCE(SUM(net_amount), 0) AS total FROM transactions WHERE status = 'CONFIRMED'",
-      ),
-      first<{ total: number }>(
-        this.db,
-        "SELECT COALESCE(SUM(net_amount), 0) AS total FROM transactions WHERE status = 'CONFIRMED' AND confirmed_at >= ?",
-        [dayStart],
-      ),
+      this.revenueSummary(),
       first<{ total: number }>(
         this.db,
         "SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_ledger WHERE type = 'DEPOSIT'",
@@ -159,15 +205,15 @@ export class ReportingService {
       invoices: {
         today: invoiceCounts?.today ?? 0,
         pending: invoiceCounts?.pending ?? 0,
-        paidToday: invoiceCounts?.paid_today ?? 0,
+        paidToday: revenue.paidToday,
         expired: invoiceCounts?.expired ?? 0,
         manualReview: invoiceCounts?.manual_review ?? 0,
       },
       money: {
-        feesTotal: feesTotal?.total ?? 0,
-        feesToday: feesToday?.total ?? 0,
-        volumeTotal: volume?.total ?? 0,
-        volumeToday: volumeToday?.total ?? 0,
+        feesTotal: revenue.feesTotal,
+        feesToday: revenue.feesToday,
+        volumeTotal: revenue.volumeTotal,
+        volumeToday: revenue.volumeToday,
         depositsTotal: deposits?.total ?? 0,
         walletsHeld: walletsHeld?.total ?? 0,
       },
@@ -198,13 +244,13 @@ export class ReportingService {
     const buckets = new Map<string, { amount: number; count: number }>();
     for (const key of keys) buckets.set(key, { amount: 0, count: 0 });
 
-    const detailed = await all<{ created_at: string; amount: number }>(
+    const detailed = await all<{ paid_at: string; amount: number }>(
       this.db,
-      "SELECT created_at, amount FROM wallet_ledger WHERE type = 'PAYMENT_FEE' AND created_at >= ?",
+      "SELECT paid_at, settled_fee AS amount FROM invoices WHERE status = 'PAID' AND paid_at >= ?",
       [from],
     );
     for (const row of detailed) {
-      const key = tehranDayKey(row.created_at);
+      const key = tehranDayKey(row.paid_at);
       const bucket = buckets.get(key);
       if (bucket) {
         bucket.amount += row.amount;
@@ -239,8 +285,8 @@ export class ReportingService {
     }>(
       this.db,
       `SELECT u.id AS user_id, mp.merchant_code, mp.display_name,
-              (SELECT COALESCE(SUM(l.amount), 0) FROM wallet_ledger l
-                WHERE l.merchant_user_id = u.id AND l.type = 'PAYMENT_FEE') AS fees,
+              (SELECT COALESCE(SUM(i.settled_fee), 0) FROM invoices i
+                WHERE i.merchant_user_id = u.id AND i.status = 'PAID') AS fees,
               (SELECT COUNT(*) FROM transactions t
                 WHERE t.merchant_user_id = u.id AND t.status = 'CONFIRMED') AS paid_count,
               (SELECT COALESCE(SUM(t.net_amount), 0) FROM transactions t

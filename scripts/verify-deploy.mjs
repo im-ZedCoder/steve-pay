@@ -17,6 +17,19 @@
  * agrees: the configured cron schedules exist on the deployed Worker, the webhook queue has
  * that Worker as its consumer, and its dead-letter queue is the configured one.
  *
+ * THE SITE IS HALF THE DEPLOYMENT, SO IT IS CHECKED TOO
+ *
+ * A Worker with its cron schedules is a complete background half and a site that answers
+ * `/health` is not a complete web half. `resolveSecrets` in `src/env.ts` fails closed: with
+ * `ENVIRONMENT=production` and any of `SESSION_SECRET`, `API_KEY_PEPPER` or `WEBHOOK_SECRET`
+ * absent, every request that resolves secrets raises `INTERNAL_ERROR` — which is the public
+ * pages rendering and both consoles answering 500, with a healthy `/health` beside them.
+ * That is not hypothetical; it is what this check was added for, on a live deployment. So the
+ * Pages project is asked for the three names.
+ *
+ * Their *values* are never returned by the API and are never asked for here. Presence is what
+ * the platform needs to boot, and presence is all this reads.
+ *
  * THE EXPECTATIONS COME FROM THE CONFIG
  *
  * The worker name, the cron list, the queue and the dead-letter queue are read out of
@@ -32,6 +45,8 @@
  * Worker as missing on a real account — the mock in the self-test had been written from the
  * same documentation, so it agreed with the bug instead of catching it.
  *
+ * A NOTE ON THE ONE-REQUEST-PER-THING RULE BELOW
+ *
  * ONE REQUEST PER THING
  *
  * The queue listing returns each queue's consumers inline, so the consumer check needs no
@@ -44,8 +59,8 @@
  *   npm run deploy:verify
  *   npm run deploy:verify -- --host https://pay.example.com
  *
- * Credentials: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. "Workers Scripts Read" is
- * enough — every endpoint here accepts it. The token is never printed.
+ * Credentials: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. "Workers Scripts Read" covers
+ * the Worker checks and "Cloudflare Pages Read" the site check; the token is never printed.
  */
 
 import { readFileSync } from 'node:fs';
@@ -75,11 +90,12 @@ Options:
   --host <origin>      Also check <origin>/health — optional, nothing depends on it
   -h, --help           This message
 
-Checks, all against wrangler.worker.jsonc rather than a copy of it:
+Checks, all against the config files rather than a copy of them:
   1. Every configured cron trigger is scheduled on the deployed Worker.
   2. The webhook queue's consumer is that Worker, not something else and not nothing.
   3. The consumer's dead-letter queue is the configured one.
-  4. With --host: the site answers /health with status ok.
+  4. The Pages project carries the three secrets the site needs to resolve at all.
+  5. With --host: the site answers /health with status ok.
 
 Exits non-zero if any check fails, so a deploy step cannot pass on half a system.
 `);
@@ -113,6 +129,19 @@ const bad = (message) => {
  */
 const configPath = join(ROOT, 'wrangler.worker.jsonc');
 const config = readFileSync(configPath, 'utf8');
+
+/** The Pages project, from the other config, for the same reason as everything else here. */
+const pagesConfig = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8');
+const pagesProject = /"name"\s*:\s*"([^"]+)"/.exec(pagesConfig)?.[1] ?? null;
+
+/**
+ * The secrets `resolveSecrets` requires before it will serve a single authenticated request.
+ *
+ * Named here rather than derived, because there is nothing in either config that declares
+ * them: they are pushed to the project, not written into a file, which is exactly why a
+ * deployment can be missing them while every file in the repository looks correct.
+ */
+const REQUIRED_SITE_SECRETS = ['SESSION_SECRET', 'API_KEY_PEPPER', 'WEBHOOK_SECRET'];
 
 const workerName = /"name"\s*:\s*"([^"]+)"/.exec(config)?.[1] ?? null;
 const cronsBlock = /"crons"\s*:\s*\[([\s\S]*?)\]/.exec(config)?.[1] ?? '';
@@ -227,7 +256,41 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 3. The site, when a host is known
+// 3. The site's own configuration
+// ---------------------------------------------------------------------------
+
+try {
+  const body = await api(`/accounts/${account}/pages/projects/${pagesProject}`);
+  const vars = body?.result?.deployment_configs?.production?.env_vars ?? {};
+
+  // A secret's value is never returned, so presence is read from its `type`. A plain-text
+  // variable is only counted when it actually has a value: an empty string is how a var
+  // looks when it was created and forgotten, and `resolveSecrets` rejects it anyway.
+  const isSet = (name) => {
+    const entry = vars[name];
+    if (!entry) return false;
+    if (typeof entry === 'string') return entry.length > 0;
+    if (entry.type === 'secret_text') return true;
+    return Boolean(entry.value);
+  };
+
+  const missing = REQUIRED_SITE_SECRETS.filter((name) => !isSet(name));
+  if (missing.length === 0) {
+    ok(`Pages project ${pagesProject} has the secrets the site needs to boot`);
+  } else {
+    bad(
+      `Pages project ${pagesProject} is missing ${missing.join(', ')} \u2014 every request that ` +
+        'resolves secrets will answer 500 while /health stays green. Set them with ' +
+        '`npm run cf:setup -- --only secrets`, then deploy the site again: Pages bakes the ' +
+        'environment into a deployment, so the running one keeps its old variables.',
+    );
+  }
+} catch (error) {
+  bad(`could not read the Pages project \u2014 ${error.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// 4. The site, when a host is known
 // ---------------------------------------------------------------------------
 
 if (hostArg) {
@@ -260,7 +323,8 @@ if (hostArg) {
 if (failures.length > 0) {
   console.error(
     `\n${failures.length} check(s) failed. The deploy is incomplete: the site may be live ` +
-      'while invoices do not expire and webhook retries never run.\n',
+      'while invoices do not expire and webhook retries never run — or its public pages may ' +
+      'be serving while every console answers 500.\n',
   );
   process.exit(1);
 }

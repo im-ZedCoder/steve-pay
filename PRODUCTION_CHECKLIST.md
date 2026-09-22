@@ -37,6 +37,12 @@ npx wrangler pages project list
       bytes of randomness
 - [ ] None of them is a development placeholder, and none is reused between environments
 - [ ] Stored as Wrangler secrets, not in `wrangler.jsonc` and not in the repo
+- [ ] Present on **both** projects, and the site deployed **after** they were set — Pages bakes
+      the environment into each deployment, so a running deployment keeps the variables it was
+      built with. `npm run deploy:verify` fails if any of the three is missing from the Pages
+      project
+- [ ] `/dashboard` and `/admin` answer `302` to `/login`, not `500`. A missing secret serves
+      every public page and fails closed on these two, which is the shape to recognize
 
 ```bash
 git log --all -p -- .env .dev.vars 2>/dev/null | grep -iE 'secret|pepper|token' | head

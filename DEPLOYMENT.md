@@ -164,6 +164,14 @@ TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, TURNSTILE_S
 SMS_IP_ALLOWLIST   # e.g. "203.0.113.4,198.51.100.0/24"
 ```
 
+### A deployment keeps the environment it was built with
+
+On Pages, variables and secrets are **baked into each deployment**. Setting them does not change
+the deployment that is serving, so after pushing a secret the site has to be deployed again
+(`npm run deploy`, or the workflow's next run) before it takes effect. `npm run cf:setup` gets this
+order right on its own — the `secrets` phase runs before `deploy` — but a partial run such as
+`--only secrets` does not, and that is the one to remember.
+
 ### What happens if a secret is missing
 
 `resolveSecrets` throws in production when any of the three required secrets is absent or shorter
@@ -171,6 +179,13 @@ than 16 characters. That is deliberate: the platform fails closed on every reque
 half-serving traffic with a development placeholder. Non-production environments fall back to fixed
 obvious placeholders so local data survives a restart — and log `config.insecure_defaults` at warn
 so the mistake is visible in the deployment that has it.
+
+**What it looks like when one is missing** is worth recognizing, because nothing else reports it:
+`/`, `/login`, `/docs` and `/health` all answer `200`, the database check in `/health` is green, and
+`/dashboard` and `/admin` answer `500` — logged as `route.failed` with `code: INTERNAL_ERROR`, not
+as an unhandled exception, because it is a deliberate failure rather than a defect. `npm run
+deploy:verify` asks the Pages project for all three names (never their values) and fails the deploy
+if one is absent, which is the check that would have caught it before a customer did.
 
 Rotating `API_KEY_PEPPER` invalidates every issued API key. Rotating `SESSION_SECRET` logs everyone
 out. Rotating `WEBHOOK_SECRET` requires re-sealing endpoint secrets — see

@@ -9,13 +9,15 @@
  * webhook is ever retried. A gate that only ever says yes is worse than no gate, because it
  * is believed.
  *
- * So this runs it against a mock of the Cloudflare API and asserts the three cases that
- * matter:
+ * So this runs it against a mock of the Cloudflare API and asserts the cases that matter:
  *
  *   - a complete deploy passes;
  *   - a deploy missing a cron trigger fails, naming the cron;
  *   - a deploy whose queue consumer is absent, or is not this Worker, or has no dead-letter
- *     queue, fails.
+ *     queue, fails;
+ *   - a site whose Pages project is missing a secret it cannot resolve fails — the case this
+ *     suite gained after a live deployment served every public page with both consoles
+ *     answering 500, which `/health` reported as fine.
  *
  * It also asserts the token never reaches stdout — the script prints API error bodies, and
  * an authorization header is exactly the kind of thing that leaks into a build log.
@@ -45,9 +47,13 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ACCOUNT = 'acct-selftest-0000000000000000';
 const TOKEN = 'selftest-token-that-must-not-be-printed';
 const WORKER = 'steve-pay-jobs';
+const PAGES = 'steve-pay';
 const QUEUE = 'steve-pay-webhooks';
 const DLQ = 'steve-pay-webhooks-dlq';
 const CRONS = ['*/2 * * * *', '*/15 * * * *', '0 3 * * *'];
+
+/** The secret names the site cannot start without, and two more that are optional. */
+const REQUIRED_SECRETS = ['SESSION_SECRET', 'API_KEY_PEPPER', 'WEBHOOK_SECRET'];
 
 let passed = 0;
 const failures = [];
@@ -74,7 +80,22 @@ const state = {
   schedules: [...CRONS],
   queues: null,
   schedulesStatus: 200,
+  // The Pages project's production environment, as the API reports it: secrets carry no
+  // value, plain variables do. An empty plain-text value is how a variable looks when it was
+  // created and forgotten, and it must not pass for a secret the site can boot with.
+  envVars: null,
 };
+
+function resetEnvVars() {
+  state.envVars = {
+    ENVIRONMENT: { type: 'plain_text', value: 'production' },
+    GATEWAY_FEE_TOMAN: { type: 'plain_text', value: '3000' },
+    TURNSTILE_SITE_KEY: { type: 'plain_text', value: '' },
+    ...Object.fromEntries(REQUIRED_SECRETS.map((name) => [name, { type: 'secret_text' }])),
+  };
+}
+
+resetEnvVars();
 
 function resetQueues() {
   state.queues = [
@@ -132,6 +153,20 @@ const server = createServer((request, response) => {
     return;
   }
 
+  if (url.pathname === `/accounts/${ACCOUNT}/pages/projects/${PAGES}`) {
+    send(200, {
+      success: true,
+      result: {
+        name: PAGES,
+        production_branch: 'main',
+        deployment_configs: { production: { env_vars: state.envVars } },
+      },
+      errors: [],
+      messages: [],
+    });
+    return;
+  }
+
   send(404, { success: false, errors: [{ code: 7003, message: `no route for ${url.pathname}` }] });
 });
 
@@ -186,7 +221,8 @@ state.schedulesStatus = 200;
   check('reports every cron', CRONS.every((cron) => output.includes(cron)));
   check('confirms the consumer', output.includes(`consumed by ${WORKER}`));
   check('confirms the dead-letter queue', output.includes(DLQ));
-  check('says the token is nowhere in the output', !output.includes(TOKEN));
+  check('says the site it serves has the secrets it needs', output.includes(`Pages project ${PAGES} has the secrets`));
+  check('the token is nowhere in the output', !output.includes(TOKEN));
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +300,39 @@ state.queues = [];
   const { status, output } = await run();
   check('exits non-zero', status !== 0);
   check('says the queue does not exist', output.includes(`queue ${QUEUE} does not exist`));
+}
+
+// ---------------------------------------------------------------------------
+section('a site that cannot resolve its secrets fails');
+// ---------------------------------------------------------------------------
+// The live failure this case was written from: every public page rendered, `/health` reported
+// `ok`, and both consoles answered 500, because the Pages project had its plain variables and
+// none of the three secrets `resolveSecrets` requires in production.
+resetQueues();
+state.schedules = [...CRONS];
+resetEnvVars();
+delete state.envVars.SESSION_SECRET;
+
+{
+  const { status, output } = await run();
+  check('exits non-zero', status !== 0);
+  check('names the missing secret', output.includes('missing SESSION_SECRET'));
+  check(
+    'says the environment is baked into a deployment, so a redeploy is needed',
+    output.includes('deploy the site again'),
+  );
+  check('says the deploy is incomplete', output.includes('deploy is incomplete'));
+}
+
+// A variable that exists and is empty is not a secret the site can boot with, and the two are
+// worth telling apart: one is a missing piece, the other is a half-finished step.
+resetEnvVars();
+state.envVars.WEBHOOK_SECRET = { type: 'plain_text', value: '' };
+
+{
+  const { status, output } = await run();
+  check('exits non-zero for an empty variable in a secret slot', status !== 0);
+  check('names it', output.includes('missing WEBHOOK_SECRET'));
 }
 
 // ---------------------------------------------------------------------------

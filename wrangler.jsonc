@@ -1,0 +1,126 @@
+{
+  // Steve Pay — Cloudflare Worker deployment configuration.
+  // Production runs on the custom domain steve-pay.ir (see routes / custom_domain below).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "steve-pay",
+  "main": "src/index.ts",
+  // Pinned to the newest date the bundled workerd binary supports. A date ahead of the
+  // installed runtime makes `wrangler dev` and the Vitest Workers pool refuse to boot
+  // ("newest date supported by this server binary is ..."), which would mean the test
+  // suite could not run against the same runtime configuration production uses. Bump this
+  // when the toolchain is upgraded, not the other way around.
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "workers_dev": false,
+  "minify": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+
+  // The dashboard, payment pages and API are all server-rendered by this Worker.
+  // `public/` only holds immutable bytes: CSS and self-hosted fonts.
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "steve-pay",
+      "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  "kv_namespaces": [
+    {
+      // Only used for caches that tolerate eventual consistency (settings, public invoice
+      // snapshots, negative caches). All correctness-critical counters live in D1.
+      "binding": "CACHE",
+      "id": "REPLACE_WITH_PRODUCTION_KV_ID",
+    },
+  ],
+
+  "queues": {
+    "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
+    "consumers": [
+      {
+        "queue": "steve-pay-webhooks",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "max_concurrency": 4,
+        "dead_letter_queue": "steve-pay-webhooks-dlq",
+      },
+    ],
+  },
+
+  "triggers": {
+    "crons": [
+      "*/2 * * * *",
+      "*/15 * * * *",
+      "0 3 * * *",
+    ],
+  },
+
+  "vars": {
+    "ENVIRONMENT": "development",
+    "BASE_URL": "https://steve-pay.ir",
+    "GATEWAY_FEE_TOMAN": "3000",
+    "UNIQUE_SUFFIX_DIGITS": "4",
+    // Turnstile site key is public and safe to ship to the browser.
+    "TURNSTILE_SITE_KEY": "",
+  },
+
+  "env": {
+    "staging": {
+      "name": "steve-pay-staging",
+      "workers_dev": true,
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "BASE_URL": "https://steve-pay-staging.<your-subdomain>.workers.dev",
+        "GATEWAY_FEE_TOMAN": "3000",
+        "UNIQUE_SUFFIX_DIGITS": "4",
+        "TURNSTILE_SITE_KEY": "",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "steve-pay-staging",
+          "database_id": "REPLACE_WITH_STAGING_D1_ID",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "REPLACE_WITH_STAGING_KV_ID" },
+      ],
+    },
+    "production": {
+      "name": "steve-pay",
+      "routes": [
+        { "pattern": "steve-pay.ir", "custom_domain": true },
+        { "pattern": "www.steve-pay.ir", "custom_domain": true },
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "BASE_URL": "https://steve-pay.ir",
+        "GATEWAY_FEE_TOMAN": "3000",
+        "UNIQUE_SUFFIX_DIGITS": "4",
+        "TURNSTILE_SITE_KEY": "",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "steve-pay",
+          "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "kv_namespaces": [
+        { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
+      ],
+    },
+  },
+}

@@ -1,0 +1,21 @@
+# Cache policy for the immutable bytes in public/.
+#
+# These paths are content-addressed by name and only ever change when the file
+# changes, so they can be cached for a year without a revalidation round trip. The
+# font files in particular are the ones the payment page needs before it can render
+# its amounts in the right typeface, so a cache miss there is visible to a customer.
+#
+# `_headers` is honoured by both Cloudflare Pages and Workers static assets. Files
+# served from here bypass the Worker entirely, which is why nosniff and the frame
+# policy are repeated: the Worker's header middleware never runs for them.
+
+/assets/*
+  cache-control: public, max-age=31536000, immutable
+  x-content-type-options: nosniff
+  x-frame-options: DENY
+  referrer-policy: no-referrer
+
+/fonts/*
+  cache-control: public, max-age=31536000, immutable
+  x-content-type-options: nosniff
+  x-frame-options: DENY

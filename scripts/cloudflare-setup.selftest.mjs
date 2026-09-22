@@ -85,6 +85,28 @@ function createMockApi() {
       queues: ['steve-pay-webhooks-dlq'],
       pages: [],
     },
+
+    // ---- the domain phase ------------------------------------------------
+    //
+    // Three things are seeded here on purpose, because each one is a way the phase could be
+    // wrong while looking right: an `A` record already at the apex (attaching the domain
+    // without replacing it leaves the hostname pointing at the old origin), a `TXT` record
+    // beside it (which must survive — it is somebody's SPF), and a domain that stays
+    // `pending` for two polls (so a single read cannot pass as a wait).
+    zones: [
+      {
+        id: 'zone-test',
+        name: 'steve-gate.ir',
+        status: 'active',
+        name_servers: ['kolton.ns.cloudflare.com', 'paris.ns.cloudflare.com'],
+      },
+    ],
+    dns: [
+      { id: 'rec-stale', type: 'A', name: 'steve-gate.ir', content: '203.0.113.10', proxied: true },
+      { id: 'rec-spf', type: 'TXT', name: 'steve-gate.ir', content: 'v=spf1 -all', proxied: false },
+    ],
+    pagesDomains: [],
+    domainPolls: 0,
   };
 
   const server = createServer((request, response) => {
@@ -154,6 +176,61 @@ function createMockApi() {
         state.mutations.push(`queue:${queue_name}`);
         state.created.queues.push(queue_name);
         return send({ result: { queue_name, queue_id: `q-${queue_name}` } });
+      }
+
+      // ---- the domain phase ------------------------------------------------
+
+      if (path === '/zones' && method === 'GET') {
+        const name = url.searchParams.get('name');
+        return send({ result: state.zones.filter((zone) => zone.name === name) });
+      }
+      if (path === '/zones/zone-test/dns_records' && method === 'GET') {
+        const name = url.searchParams.get('name');
+        return send({ result: state.dns.filter((record) => record.name === name) });
+      }
+      if (path === '/zones/zone-test/dns_records' && method === 'POST') {
+        const record = JSON.parse(body);
+        state.mutations.push(`dns:${record.type}:${record.name}:${record.content}`);
+        const made = { id: `rec-new-${state.dns.length + 1}`, ...record };
+        state.dns.push(made);
+        return send({ result: made });
+      }
+      if (path.startsWith('/zones/zone-test/dns_records/') && method === 'DELETE') {
+        const id = path.split('/').pop();
+        state.mutations.push(`dns-delete:${id}`);
+        state.dns = state.dns.filter((record) => record.id !== id);
+        return send({ result: { id } });
+      }
+      if (path === '/accounts/acct-test/pages/projects/steve-pay/domains' && method === 'GET') {
+        return send({ result: state.pagesDomains });
+      }
+      if (path === '/accounts/acct-test/pages/projects/steve-pay/domains' && method === 'POST') {
+        const { name } = JSON.parse(body);
+        state.mutations.push(`domain:${name}`);
+        const made = {
+          id: 'dom-test',
+          name,
+          status: 'pending',
+          verification_data: { status: 'pending' },
+          validation_data: { status: 'pending', method: 'http' },
+        };
+        state.pagesDomains.push(made);
+        return send({ result: made });
+      }
+      if (path.startsWith('/accounts/acct-test/pages/projects/steve-pay/domains/') && method === 'GET') {
+        const host = decodeURIComponent(path.split('/').pop());
+        state.domainPolls += 1;
+        const record = state.pagesDomains.find((domain) => domain.name === host) ?? { name: host };
+        // Pending for the first two reads. A phase that reads once and moves on would
+        // report a domain that is merely slow as if it were attached and serving.
+        const active = state.domainPolls > 2;
+        return send({
+          result: {
+            ...record,
+            status: active ? 'active' : 'pending',
+            verification_data: { status: active ? 'active' : 'pending' },
+          },
+        });
       }
 
       return send({ errors: [{ code: 7003, message: `No route for the URI ${method} ${path}` }] }, 404);
@@ -295,7 +372,17 @@ function runSetup(directory, apiBase, extraArgs) {
     const child = spawn(
       process.execPath,
       [join(directory, 'scripts', 'cloudflare-setup.mjs'), '--token', 'test-token', '--yes', ...extraArgs],
-      { cwd: directory, env: { ...process.env, CLOUDFLARE_API_BASE: apiBase, NO_COLOR: '1' } },
+      {
+        cwd: directory,
+        env: {
+          ...process.env,
+          CLOUDFLARE_API_BASE: apiBase,
+          NO_COLOR: '1',
+          // The certificate wait is fifteen seconds between polls in real use. The seam
+          // exists so this suite drives the loop instead of spending it.
+          CLOUDFLARE_SETUP_POLL_MS: '20',
+        },
+      },
     );
 
     let output = '';
@@ -557,6 +644,140 @@ async function main() {
     check(
       'explains how to make a token when none is given',
       noToken.status === 1 && noToken.stdout.includes('dash.cloudflare.com/profile/api-tokens'),
+    );
+
+    // -----------------------------------------------------------------------
+    section('the domain phase makes the hostname resolve, not just attach');
+    // -----------------------------------------------------------------------
+    // Attaching a custom domain to a Pages project is one call, and on its own it produces a
+    // hostname that answers Cloudflare error 1016 to everyone: `pending`, with
+    // `error_message: "CNAME record not set"`. The record is what makes it live, so this run
+    // asserts both halves and the state they leave behind.
+    const configBeforeDomain = readFileSync(configPath, 'utf8');
+    mock.state.mutations = [];
+    const withDomain = await runSetup(directory, apiBase, [
+      '--env',
+      'production',
+      '--only',
+      'pages,domain',
+      '--domain',
+      'steve-gate.ir',
+    ]);
+
+    check('exits 0', withDomain.status === 0, `status ${withDomain.status}\n${withDomain.output}`);
+    check(
+      'removed the record that kept the hostname off the project',
+      mock.state.mutations.includes('dns-delete:rec-stale'),
+      `mutations: ${mock.state.mutations.join(', ')}`,
+    );
+    check(
+      'created a CNAME at the apex pointing at the Pages project',
+      mock.state.mutations.includes('dns:CNAME:steve-gate.ir:steve-pay.pages.dev'),
+      `mutations: ${mock.state.mutations.join(', ')}`,
+    );
+    check(
+      'proxied it, which is what a Pages custom domain needs',
+      mock.state.dns.some((record) => record.name === 'steve-gate.ir' && record.proxied === true),
+    );
+    check(
+      'left the neighbouring TXT record alone',
+      mock.state.dns.some((record) => record.id === 'rec-spf') &&
+        !mock.state.mutations.some((mutation) => mutation.includes('rec-spf')),
+      'a record that decides mail delivery was deleted to attach a website',
+    );
+    check(
+      'attached the domain to the Pages project',
+      mock.state.mutations.includes('domain:steve-gate.ir'),
+      `mutations: ${mock.state.mutations.join(', ')}`,
+    );
+    check(
+      'waited for the certificate instead of reading the status once',
+      mock.state.domainPolls > 2 && withDomain.output.includes('domain: active'),
+      `polls: ${mock.state.domainPolls}\n${withDomain.output}`,
+    );
+    check(
+      'reported the exit as the hostname it is now served on',
+      withDomain.output.includes('https://steve-gate.ir now serves this deployment'),
+    );
+    // The platform reads its own origin from each request, so a hostname in a config file is
+    // the one thing that would break a rename or a second domain. This phase must not be the
+    // reason one appears.
+    check(
+      'wrote no hostname into either config file',
+      readFileSync(configPath, 'utf8') === configBeforeDomain &&
+        !/steve-gate\.ir/.test(readFileSync(workerConfigPath, 'utf8')),
+      'the domain phase edited a deploy config',
+    );
+
+    // -----------------------------------------------------------------------
+    section('running the domain phase again changes nothing');
+    // -----------------------------------------------------------------------
+    mock.state.mutations = [];
+    const domainAgain = await runSetup(directory, apiBase, [
+      '--env',
+      'production',
+      '--only',
+      'pages,domain',
+      '--domain',
+      'steve-gate.ir',
+    ]);
+
+    check('exits 0', domainAgain.status === 0, `status ${domainAgain.status}\n${domainAgain.output}`);
+    check(
+      'created and deleted nothing',
+      mock.state.mutations.length === 0,
+      `mutations: ${mock.state.mutations.join(', ')}`,
+    );
+    check(
+      'recognised the record and the domain it already had',
+      domainAgain.output.includes('(already existed)') &&
+        !/\+ DNS CNAME/.test(domainAgain.output),
+    );
+
+    // -----------------------------------------------------------------------
+    section('a domain it cannot place is refused, and read correctly first');
+    // -----------------------------------------------------------------------
+    const noHost = await runSetup(directory, apiBase, ['--only', 'domain']);
+    check(
+      'refuses --only domain with no hostname',
+      noHost.status === 1 && noHost.output.includes('needs --domain'),
+      noHost.output,
+    );
+
+    const url = await runSetup(directory, apiBase, [
+      '--env',
+      'production',
+      '--only',
+      'pages,domain',
+      '--domain',
+      'https://steve-gate.ir/',
+      '--dry-run',
+    ]);
+    check(
+      'reads a pasted URL as a bare hostname instead of creating a record named after it',
+      // Both halves matter: that it said what it derived, and that the record it works with
+      // is at the derived name. `https://steve-gate.ir/` as a record name is not a record.
+      url.output.includes('read as steve-gate.ir') && url.output.includes('dns steve-gate.ir →'),
+      url.output,
+    );
+    check(
+      'changes nothing while describing it',
+      mock.state.mutations.length === 0,
+      `mutations: ${mock.state.mutations.join(', ')}`,
+    );
+
+    const foreign = await runSetup(directory, apiBase, [
+      '--env',
+      'production',
+      '--only',
+      'pages,domain',
+      '--domain',
+      'pay.someone-elses-domain.com',
+    ]);
+    check(
+      'refuses a hostname whose zone is not in this account',
+      foreign.status === 1 && foreign.output.includes('No zone in this account contains'),
+      foreign.output,
     );
 
     // -----------------------------------------------------------------------

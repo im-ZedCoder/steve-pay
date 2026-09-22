@@ -98,14 +98,22 @@ Review each of these against your business decisions rather than accepting the d
 
 The project ships with no hostname configured, so the first deployment is already live on its
 `<project>.pages.dev` address and every link it generates points there. A custom domain is a
-dashboard step, not a code change — nothing needs redeploying when you attach one.
+Cloudflare step, not a code change — nothing needs redeploying when you attach one:
+
+```bash
+npm run cf:setup -- --env production --domain pay.example.com --only pages,domain --yes
+```
 
 - [ ] The `*.pages.dev` address serves the platform and `/health` answers
 - [ ] For a custom domain: its zone reports `active` in the account. An attached domain whose
       zone is still `pending` sits at `status: pending` and resolves nothing, which reads as a
       broken deployment and is a nameserver at the registrar
-- [ ] The custom domain is attached (Workers & Pages → your project → Custom domains) and its
-      certificate is issued
+- [ ] The DNS record exists — `CNAME <host> → steve-pay.pages.dev`, proxied. Attaching the domain
+      without it leaves `verification_data.error_message: "CNAME record not set"` and every
+      request answering Cloudflare error 1016, and this is the half that gets missed
+- [ ] `verification_data.status` is `active` and the certificate is issued — this is what
+      `--domain` waits for, and `pending` after five minutes means the certificate, not a
+      missing step
 - [ ] The `www` host resolves, or is set to redirect to the apex
 - [ ] Every generated link follows the host it is served on: open a payment page on both hosts and
       compare the invoice URL in the status response

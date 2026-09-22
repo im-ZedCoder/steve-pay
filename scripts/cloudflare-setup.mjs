@@ -51,11 +51,22 @@
  * WHAT IT CANNOT DO
  *
  *   - Register the Telegram webhook. That is a Telegram API call, not a Cloudflare one.
- *   - Attach a custom domain. There is no domain anywhere in this repository: the platform
- *     reads its own origin from each request, so it answers correctly on
- *     `<project>.pages.dev` from the first deploy. Add the domain in the dashboard
- *     (Workers & Pages → your Pages project → Custom domains) whenever you like, and the
- *     application needs no redeploy and no configuration change when you do.
+ *
+ * WHAT IT DOES ONLY WHEN ASKED
+ *
+ *   - `--domain <host>` attaches a hostname to the Pages project **and creates the DNS
+ *     record it needs**, which is two steps people do by hand and one of them is easy to
+ *     miss. Attaching alone leaves the domain at `status: pending` with
+ *     `verification_data.error_message: "CNAME record not set"`, which serves nothing and
+ *     answers every request with Cloudflare error 1016. The phase needs DNS: Edit on the
+ *     zone, and it never writes a hostname into a config file: the platform reads its own
+ *     origin from each request, so a deployment answers on whatever host reaches it and
+ *     no redeploy follows a domain change.
+ *
+ *     Nothing happens without the flag. A run that is not asked to touch DNS does not touch
+ *     DNS — deleting a record is the one destructive thing in this script, and it happens
+ *     only for the exact hostname being attached, only when that record is an A, AAAA or
+ *     CNAME that points somewhere other than the project.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -103,11 +114,11 @@ const RESOURCES = {
  * schema rather than a 500 — the code is not written to run against an empty database, and
  * it should not have to be.
  *
- * There is no `domain` phase. Nothing in this repository names a hostname, so there is
- * nothing for the script to attach or verify; the custom domain is added in the dashboard
- * and the application picks it up from the next request it serves.
+ * `domain` is last but one, and only runs when `--domain` was given: it needs the Pages
+ * project to exist, and it is the one phase that changes something a customer can see, so
+ * it goes after the deployment it points at.
  */
-const PHASES = ['verify', 'd1', 'kv', 'queues', 'pages', 'config', 'migrate', 'secrets', 'deploy', 'admin'];
+const PHASES = ['verify', 'd1', 'kv', 'queues', 'pages', 'config', 'migrate', 'secrets', 'deploy', 'domain', 'admin'];
 
 const TOKEN_PERMISSIONS = [
   ['Account', 'D1', 'Edit'],
@@ -117,6 +128,8 @@ const TOKEN_PERMISSIONS = [
   ['Account', 'Cloudflare Pages', 'Edit'],
   ['Account', 'Account Settings', 'Read'],
   ['User', 'User Details', 'Read'],
+  // Only needed for `--domain`: it creates the DNS record the Pages domain requires.
+  ['Zone', 'DNS', 'Edit'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -178,6 +191,8 @@ ${bold('Options')}
   --account <id>           Account id. Discovered from the token when omitted.
   --env <name>             production (the only configured environment)
   --secrets <path>         JSON file of secrets to push (see below)
+  --domain <host>          Attach this hostname to the Pages project and create its DNS
+                           record, then wait until Cloudflare reports it active
   --turnstile-site-key <k> Public Turnstile site key, written into wrangler.jsonc vars
   --only <a,b>             Run only these phases
   --skip <a,b>             Skip these phases
@@ -214,6 +229,7 @@ function parseArgs(argv) {
     account: null,
     env: 'production',
     secrets: null,
+    domain: null,
     turnstileSiteKey: null,
     only: null,
     skip: null,
@@ -245,6 +261,9 @@ function parseArgs(argv) {
         break;
       case '--secrets':
         args.secrets = need(token, ++index);
+        break;
+      case '--domain':
+        args.domain = normalizeDomain(need(token, ++index));
         break;
       case '--turnstile-site-key':
         args.turnstileSiteKey = need(token, ++index);
@@ -302,7 +321,43 @@ function parseArgs(argv) {
     }
   }
 
+  // `--only domain` without a hostname is a contradiction worth refusing: the phase would
+  // run, find nothing to do and report success, and the reason a domain is still not
+  // attached would be a missing flag nobody was told about.
+  if (args.only?.includes('domain') && !args.domain) {
+    console.error('--only domain needs --domain <host>: there is nothing to attach otherwise.');
+    process.exit(1);
+  }
+
   return args;
+}
+
+/**
+ * Normalises a hostname, and refuses anything that is not one.
+ *
+ * A full URL is the mistake people make here (`https://example.com/`), and pasting one into
+ * a DNS record would create a record named after the URL. Refused with the value it derived,
+ * so the fix is obvious.
+ */
+function normalizeDomain(value) {
+  const trimmed = value.trim().toLowerCase();
+  const host = trimmed
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/\.$/, '');
+
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+    console.error(`Not a hostname: "${value}"${host !== trimmed ? ` (read as "${host}")` : ''}`);
+    console.error('Pass the name only, with no scheme and no path — for example: --domain pay.example.com');
+    process.exit(1);
+  }
+
+  // A pasted URL is the common case, and it is accepted rather than rejected — but it is
+  // said out loud, because the record is created for what this function derived and silence
+  // would leave the difference to be discovered in the DNS tab.
+  if (host !== trimmed) detail(`--domain ${value} read as ${bold(host)}`);
+
+  return host;
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +674,7 @@ async function phasePages(state) {
     existed(`Pages project ${name}`);
     if (found.subdomain) {
       state.pagesUrl = `https://${found.subdomain}`;
+      state.pagesHost = found.subdomain;
       log(`url: ${bold(state.pagesUrl)}`);
     }
     return;
@@ -638,8 +694,9 @@ async function phasePages(state) {
 
   const subdomain = made?.subdomain ?? `${name}.pages.dev`;
   state.pagesUrl = `https://${subdomain}`;
+  state.pagesHost = subdomain;
   log(`url: ${bold(state.pagesUrl)}`);
-  detail('This is the address the application already answers on — no domain is configured.');
+  detail('This is the address the application answers on before any domain is attached.');
 }
 
 async function phaseD1(state) {
@@ -999,6 +1056,152 @@ async function phaseDeploy(state) {
   }
 }
 
+/**
+ * How long to wait for a certificate, and how often to look.
+ *
+ * Five minutes over fifteen-second polls: issuance is normally under a minute, and the wait
+ * only bounds how long this script sits still. Overridable so the self-test can drive the
+ * polling loop instead of spending them — the same seam, and the same reasoning, as
+ * `CLOUDFLARE_API_BASE`.
+ */
+const DOMAIN_POLL_INTERVAL_MS = Number(process.env.CLOUDFLARE_SETUP_POLL_MS ?? 15_000);
+const DOMAIN_POLL_ATTEMPTS = 20;
+
+/**
+ * The zone that owns a hostname.
+ *
+ * Walked from the left because any label can be the apex (`pay.example.com` is in the zone
+ * `example.com`, and `example.co.uk` is in a zone whose name is three labels long, which no
+ * public-suffix heuristic in this file is going to get right). Each candidate is asked about
+ * by name, so the API answers the question rather than a guess.
+ */
+async function findZoneFor(state, host) {
+  const labels = host.split('.');
+  for (let index = 0; index <= labels.length - 2; index += 1) {
+    const candidate = labels.slice(index).join('.');
+    const zones = (await cf(`/zones?name=${candidate}&per_page=5`, { token: state.token })) ?? [];
+    const found = zones.find((zone) => zone.name === candidate);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Attaches the hostname, creating the DNS record first.
+ *
+ * Both halves are needed and only one of them is obvious. Attaching a custom domain to a
+ * Pages project is a single call; a hostname whose zone has no record pointing at the
+ * project is reported by that same API as `pending` and serves Cloudflare error 1016 to
+ * every visitor, which reads as a broken deployment. The record is what makes the domain
+ * live, so this phase does it rather than mentioning it.
+ */
+async function phaseDomain(state) {
+  phase('domain');
+
+  const host = state.domain;
+  const project = RESOURCES.production.project;
+  const target = state.pagesHost ?? `${project}.pages.dev`;
+
+  const zone = await findZoneFor(state, host);
+  if (!zone) {
+    fail(`No zone in this account contains ${host}.`);
+    detail('A custom domain can only be attached for a zone this token can see. If the');
+    detail('domain is registered elsewhere, the zone has to be added to this account first.');
+    process.exit(1);
+  }
+
+  log(`zone: ${bold(zone.name)} ${dim(zone.id)}`);
+  if (zone.status !== 'active') {
+    // Not fatal: the record and the attachment are correct either way and this is the step
+    // that needs the registrar, not another run of this script.
+    warn(`The zone is ${zone.status}, so nothing will resolve until the registrar uses its nameservers.`);
+    detail(`nameservers: ${(zone.name_servers ?? []).join(', ') || 'unknown'}`);
+  }
+
+  process.stdout.write(`  dns ${host} → ${target}`);
+  const records = (await cf(`/zones/${zone.id}/dns_records?name=${host}&per_page=100`, { token: state.token })) ?? [];
+
+  // Only records at exactly this name, and only the types that decide where it points.
+  // A TXT record beside them is somebody's SPF or verification and is left alone.
+  const conflicting = records.filter(
+    (record) => ['A', 'AAAA', 'CNAME'].includes(record.type) && record.content !== target,
+  );
+  const alreadyPoints = records.some((record) => record.type === 'CNAME' && record.content === target);
+
+  process.stdout.write('\n');
+
+  if (state.dryRun) {
+    for (const record of conflicting) log(`would remove ${record.type} ${record.name} ${dim(`→ ${record.content}`)}`);
+    if (!alreadyPoints) log(`would create CNAME ${host} → ${target} ${dim('(proxied)')}`);
+    log(`would attach ${host} to the Pages project ${project}`);
+    return;
+  }
+
+  for (const record of conflicting) {
+    await cf(`/zones/${zone.id}/dns_records/${record.id}`, { method: 'DELETE', token: state.token });
+    // Said plainly because it is the only destructive thing this script does, and because a
+    // record that was pointing at real infrastructure is worth noticing rather than
+    // discovering later.
+    created(`removed ${record.type} ${record.name} → ${record.content} (it kept the hostname off the project)`);
+  }
+
+  if (alreadyPoints) {
+    existed(`DNS CNAME ${host} → ${target}`);
+  } else {
+    await cf(`/zones/${zone.id}/dns_records`, {
+      method: 'POST',
+      token: state.token,
+      body: { type: 'CNAME', name: host, content: target, proxied: true, ttl: 1 },
+    });
+    created(`DNS CNAME ${host} → ${target} ${dim('(proxied)')}`);
+  }
+
+  const domains = (await cf(`/accounts/${state.account}/pages/projects/${project}/domains`, { token: state.token })) ?? [];
+  if (domains.some((domain) => domain.name === host)) {
+    existed(`Pages custom domain ${host}`);
+  } else {
+    await cf(`/accounts/${state.account}/pages/projects/${project}/domains`, {
+      method: 'POST',
+      token: state.token,
+      body: { name: host },
+    });
+    created(`Pages custom domain ${host}`);
+  }
+
+  // Then wait for the certificate, because `pending` is what the domain reports until it
+  // exists and `pending` is what someone will otherwise see when they check.
+  for (let attempt = 1; attempt <= DOMAIN_POLL_ATTEMPTS; attempt += 1) {
+    const domain = await cf(`/accounts/${state.account}/pages/projects/${project}/domains/${host}`, { token: state.token });
+    const verification = domain?.verification_data ?? {};
+    const validation = domain?.validation_data ?? {};
+
+    if (verification.status === 'active' && domain.status === 'active') {
+      log(`domain: ${green('active')} — ${bold(`https://${host}`)} now serves this deployment`);
+      state.domainStatus = 'active';
+      return;
+    }
+
+    if (attempt === 1) {
+      detail(`waiting for the certificate: verification ${verification.status ?? 'unknown'}, validation ${validation.status ?? 'unknown'}`);
+      if (verification.error_message) detail(`Cloudflare reports: ${verification.error_message}`);
+    }
+    if (attempt < DOMAIN_POLL_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, DOMAIN_POLL_INTERVAL_MS));
+  }
+
+  // A warning and not a failure. The record exists and the domain is attached — which is
+  // what this phase does — and what is left is Cloudflare issuing a certificate on its own
+  // clock. Failing here would mean a run that did everything right reports that it did not,
+  // and the honest place to catch a domain that never comes up is the health probe.
+  state.domainStatus = 'pending';
+  warn(`The domain is still issuing its certificate after ${(DOMAIN_POLL_ATTEMPTS * DOMAIN_POLL_INTERVAL_MS) / 1000}s.`);
+  detail('That is Cloudflare issuing a certificate, not a missing step. Check it with:');
+  log('');
+  detail(`  curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/${project}/domains/${host}" \\`);
+  detail('    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | python -m json.tool');
+  log('');
+  detail(`until it reports "active", then: curl -s https://${host}/health`);
+}
+
 async function phaseAdmin(state) {
   phase('admin');
 
@@ -1096,10 +1299,21 @@ async function main() {
     // the `for (const envName of state.environments)` loops honest rather than a vestige.
     environments: [args.env],
     pagesUrl: null,
+    // The `pages.dev` hostname, which is what a DNS record has to point at. Set by the
+    // `pages` phase, so it is read from the account rather than assumed to be
+    // `<project>.pages.dev` — a project whose subdomain was renamed still works.
+    pagesHost: null,
+    domain: args.domain,
+    domainStatus: null,
     // Both wrangler and the REST client authenticate from the environment, so a child
     // process can never pick up a *different* token than the one verified above.
     childEnv: { CLOUDFLARE_API_TOKEN: token },
-    plan: args.only ?? PHASES.filter((name) => !(args.skip ?? []).includes(name)),
+    // `domain` is dropped from the default plan unless a hostname was given: the phase is
+    // the only one that changes something outside this project, and a run that was not
+    // asked to touch DNS should not print that it did.
+    plan: (args.only ?? PHASES.filter((name) => !(args.skip ?? []).includes(name))).filter(
+      (name) => name !== 'domain' || args.domain !== null,
+    ),
   };
 
   console.log(`\n${bold('Steve Pay')} ${dim('· Cloudflare provisioning')}`);
@@ -1115,6 +1329,7 @@ async function main() {
     migrate: phaseMigrate,
     secrets: phaseSecrets,
     deploy: phaseDeploy,
+    domain: phaseDomain,
     admin: phaseAdmin,
   };
 
@@ -1164,13 +1379,18 @@ async function main() {
   row('pages project', RESOURCES.production.project);
   row('companion', RESOURCES.production.jobs);
   if (state.pagesUrl) row('url', state.pagesUrl);
+  if (state.domain) row('domain', `https://${state.domain} ${state.domainStatus ? dim(`(${state.domainStatus})`) : ''}`);
 
   console.log(`\n${bold('Next')}`);
   log(`1. Check the deployment health probe: ${state.pagesUrl ?? ''}/health should return {"status":"ok"}`);
   log('2. Open the site and confirm the pages render — that address is the origin every link uses');
-  log('3. Attach your custom domain in the dashboard when you have one: Workers & Pages → your');
-  detail('   Pages project → Custom domains. Nothing in the project needs to change; the next');
-  detail('   request is served on the new host and every generated link follows it.');
+  if (state.domain) {
+    log(`3. The domain is attached and its record exists — confirm it serves: curl -s https://${state.domain}/health`);
+  } else {
+    log('3. Attach your custom domain when you have one — this does the whole job, including');
+    detail('   the DNS record a bare attach leaves missing:');
+    detail('   npm run cf:setup -- --domain pay.example.com --only pages,domain --yes');
+  }
   log(`4. Commit the config changes: ${dim('git add wrangler.jsonc wrangler.worker.jsonc && git commit')}`);
   log('5. Sign in at /login?scope=admin and approve the first merchant');
   if (!state.turnstileSiteKey) {

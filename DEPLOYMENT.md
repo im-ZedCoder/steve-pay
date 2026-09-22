@@ -309,12 +309,46 @@ instead of a production one. The API equivalent of the toggle is `deployments_en
 `production_deployments_enabled` on the project's `source.config`.
 
 **Why it is worth turning off rather than tolerating.** On this project every Git-triggered
-deployment reached `build: success, deploy: failure` — for commits whose identical artifact
-deployed correctly with `wrangler pages deploy` moments later. Cloudflare's API reports which
-stage failed and not why, so there is nothing to fix from this side; the CLI path the workflow
-uses is the one that works. Left on, it also means every push produces a failed deployment in
-the dashboard, which trains everyone to ignore that screen — and it ships the site without the
-Worker.
+deployment reached `build: success, deploy: failure`, for commits whose identical artifact
+deployed correctly with `wrangler pages deploy` moments later. The reason is in the failed
+stage's own log — `GET /accounts/:id/pages/projects/:name/deployments/:id/history/logs`, which
+has it, unlike the dashboard, which shows the stage and not the message:
+
+```
+Executing user command: bun run build
+$ node scripts/build-pages.mjs
+build-pages: dist-pages ready — 14 files, 727.9 KiB
+Checking for configuration in a Wrangler configuration file (BETA)
+Found _worker.js in output directory. Uploading.
+ ⛅️ wrangler 3.114.17
+✨ Compiled Worker successfully
+Found _routes.json in output directory. Uploading.
+Success: Assets published!
+Error: Failed to publish your Function. Got error: Uncaught TypeError: Object.defineProperty called on non-object
+  at functionsWorker-0.….js:881:43 in l
+  at functionsWorker-0.….js:4624:5 in <static_initializer>
+```
+
+The build is fine and the assets publish. Only the Function is rejected, and it is rejected for
+something in its module-scope code: `functionsWorker` line 4624 is a class static
+*initializer*, and line 881 is the helper it calls — `l`, which is `Object.defineProperty`
+binding a name — receiving something that is not an object.
+
+The mechanism is the second bundling pass. `dist-pages/_worker.js` is already a bundle;
+`scripts/build-pages.mjs` produces it with `wrangler deploy --dry-run`, so it is the artifact
+the runtime config asks for. The deploy stage then bundles it **again**, with the wrangler
+pinned into the Pages build image (3.114.17 here, against the 4.x in `package.json`) — and that
+pass is what breaks it. All 31 static initializers in the bundle are esbuild's class-name
+setter (`static{l(this,"AppError")}` and so on), emitted because the bundler is asked to keep
+names for stack traces. Publishing the same artifact with `--no-bundle`, which is what the
+workflow does, skips the second pass and succeeds — confirmed by deploying the same artifact to
+a preview branch, where it serves `/`, `/login` and `/health` with `200`.
+
+So this is not a configuration mistake on this side: it is the platform re-grading an artifact
+it was handed. Doing the two things we *can* do — shipping through the CLI with `--no-bundle`,
+and leaving the Git build off so a push cannot ship the site ahead of its checks and without
+the Worker — is the whole fix available. Left on, it also means every push produces a failed
+deployment in the dashboard, which trains everyone to ignore that screen.
 
 ### Verifying by hand
 
@@ -337,14 +371,35 @@ look complete while invoices stop expiring.
 ## 7. Custom domain
 
 Nothing in the project needs to change, nothing needs redeploying, and no file records the
-domain. The domain is attached to the Pages project in the dashboard — Workers & Pages → your
-project → **Custom domains** — or by one call, which is the same thing:
+domain — the platform reads its own origin from each request, so the deployment answers on
+whatever host reaches it. One command attaches the hostname **and creates the DNS record it
+needs**, which are two things and only one of them is obvious:
 
 ```bash
+npm run cf:setup -- --env production --domain pay.example.com --only pages,domain --yes
+```
+
+The phase walks the hostname from the left to find the zone that owns it, replaces any `A`,
+`AAAA` or `CNAME` record at that exact name that points somewhere other than the project, creates
+`CNAME <host> → steve-pay.pages.dev` with proxying on, attaches the domain, and then waits for
+Cloudflare to report it `active`. Records of other types at the same name are left alone, and
+nothing is written into either config file.
+
+It needs `Zone → DNS → Edit` in addition to the permissions `npm run cf:setup -- --help` lists,
+and nothing happens without the flag: a run that was not asked to touch DNS does not touch it. The equivalent by hand is the
+two calls below — the record, then the attachment — and the sections after this one are what
+happens when only the second one is done.
+
+```bash
+curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"type":"CNAME","name":"pay.example.com","content":"steve-pay.pages.dev","proxied":true}'
+
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/steve-pay/domains" \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"name":"your-domain.example"}'
+  --data '{"name":"pay.example.com"}'
 ```
 
 ### The zone has to be live first, and that is the step people get stuck on
@@ -361,8 +416,41 @@ curl -s "https://api.cloudflare.com/client/v4/zones?name=your-domain.example" \
 ```
 
 `pending` means the registrar still has other nameservers (or none). Set the ones printed by
-that command at the registrar, wait for the zone to report `active`, and the certificate and the
-DNS record follow on their own — Cloudflare creates both when the zone is in the same account.
+that command at the registrar and wait for the zone to report `active`.
+
+### The second thing that stops it: the record itself
+
+Those are two different waits, and only the first is about the zone. A zone can be `active`, in
+the same account, with the Pages domain attached — and still not serve, because nothing created
+the DNS record that points the hostname at the project. The domain reports it, and this is the
+field to read rather than the one that reads `pending`:
+
+```bash
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/steve-pay/domains/<domain>" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  | python -c "import json,sys; d=json.load(sys.stdin)['result']; print(d['status'], d.get('verification_data'), d.get('validation_data'))"
+
+# pending {'status': 'pending', 'error_message': 'CNAME record not set'} {'status': 'pending', 'method': 'http'}
+```
+
+`CNAME record not set` is the whole problem: the hostname resolves to Cloudflare's edge (so the
+zone looks fine from the outside) but the edge has no origin for it, and every request answers
+**530** with Cloudflare **error 1016, origin DNS error** until the record exists. Add it in the
+zone — DNS → Records → Add record — with the project's `pages.dev` hostname as the target, and
+proxying on:
+
+| Type | Name | Target | Proxy |
+|---|---|---|---|
+| `CNAME` | `@` (the apex) | `steve-pay.pages.dev` | Proxied |
+
+A CNAME at the apex is flattened by Cloudflare, so no special record type is needed. The
+certificate then issues within a few minutes (`validation_data.method: http` is the check it is
+waiting to run, and it can only run once the record resolves), `verification_data.status` turns
+`active`, the domain leaves `pending`, and the same request starts answering `200`.
+
+If a record for that name already exists — from an earlier deployment, or from the zone being
+set up by hand — replace its target rather than adding a second one; a hostname with two
+records is served by whichever the edge picks, and the Pages domain will keep waiting.
 
 ### What follows the host automatically
 

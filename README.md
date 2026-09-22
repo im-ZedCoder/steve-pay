@@ -139,6 +139,9 @@ npm run cf:setup -- --help                 # what it provisions, and the token p
 npm run cf:setup -- --dry-run              # report, change nothing
 npm run cf:setup -- --env production --yes # do all of it
 npm run cf:setup:test                      # verify the script against a mock API
+
+# later, when you have a domain: attaches it and creates the DNS record it needs
+npm run cf:setup -- --domain pay.example.com --only pages,domain --yes
 ```
 
 Afterwards, the two halves deploy and are then checked against the account:

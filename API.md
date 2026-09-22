@@ -1,6 +1,12 @@
 # API reference
 
-Base URL: `https://steve-pay.ir/api/v1`
+Base URL: `https://steve-gate.ir/api/v1`
+
+That host is the one this deployment answers on today. Nothing in the platform is configured
+with it: every absolute URL it returns — `paymentUrl`, `webhookUrl`, the links in a Telegram
+alert — is built from the request being served, so a second host or a renamed domain needs no
+change here or in the code. If you are calling a preview or a different environment, use *its*
+host and the paths below.
 
 All requests are JSON. All responses are JSON. Every response carries `X-Request-Id` — quote it
 in support requests and it will line up with the logs and the audit trail.
@@ -83,7 +89,7 @@ invoice for the wrong value and the merchant would find out from a customer.
   "success": true,
   "paymentId": "pay_01J8XK...",
   "invoiceId": "inv_01J8XK...",
-  "paymentUrl": "https://steve-pay.ir/pay/inv_01J8XK...",
+  "paymentUrl": "https://steve-gate.ir/pay/inv_01J8XK...",
   "amount": 363706,
   "amountRial": 3637060,
   "currency": "IRT",
@@ -99,7 +105,7 @@ invoice for the wrong value and the merchant would find out from a customer.
     "payableAmountRial": 3637060,
     "baseAmount": 362000,
     "uniqueSuffix": 1706,
-    "paymentUrl": "https://steve-pay.ir/pay/inv_01J8XK...",
+    "paymentUrl": "https://steve-gate.ir/pay/inv_01J8XK...",
     "expiresAt": "2026-09-22T10:45:00.000Z",
     "createdAt": "2026-09-22T10:15:00.000Z",
     "environment": "live",
@@ -218,7 +224,7 @@ Only the masked form is ever returned over the API.
   "sms": {
     "pipelineConnected": true,
     "verifiedAt": "2026-09-20T09:12:00.000Z",
-    "webhookUrl": "https://steve-pay.ir/sms"
+    "webhookUrl": "https://steve-gate.ir/sms"
   },
   "webhooks": { "configured": true, "active": 1 },
   "wallet": { "balance": 147000, "availableBalance": 147000, "reservedBalance": 0, "currency": "IRT" },
@@ -371,7 +377,7 @@ Honour `Retry-After`.
 ### cURL
 
 ```bash
-curl -X POST https://steve-pay.ir/api/v1/payments \
+curl -X POST https://steve-gate.ir/api/v1/payments \
   -H "X-API-Key: sk_live_<key-id><secret>" \
   -H "Idempotency-Key: order_1234" \
   -H "Content-Type: application/json" \
@@ -381,7 +387,7 @@ curl -X POST https://steve-pay.ir/api/v1/payments \
 ### JavaScript
 
 ```js
-const response = await fetch('https://steve-pay.ir/api/v1/payments', {
+const response = await fetch('https://steve-gate.ir/api/v1/payments', {
   method: 'POST',
   headers: {
     'X-API-Key': process.env.STEVE_PAY_KEY,
@@ -417,7 +423,7 @@ $payload = json_encode([
   'metadata'    => ['orderId' => '1234'],
 ], JSON_UNESCAPED_UNICODE);
 
-$ch = curl_init('https://steve-pay.ir/api/v1/payments');
+$ch = curl_init('https://steve-gate.ir/api/v1/payments');
 curl_setopt_array($ch, [
   CURLOPT_POST           => true,
   CURLOPT_POSTFIELDS     => $payload,
@@ -451,7 +457,7 @@ import os
 import requests
 
 response = requests.post(
-    "https://steve-pay.ir/api/v1/payments",
+    "https://steve-gate.ir/api/v1/payments",
     headers={
         "X-API-Key": os.environ["STEVE_PAY_KEY"],
         "Idempotency-Key": f"order_{order_id}",

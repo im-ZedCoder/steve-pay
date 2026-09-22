@@ -101,8 +101,11 @@ The project ships with no hostname configured, so the first deployment is alread
 dashboard step, not a code change — nothing needs redeploying when you attach one.
 
 - [ ] The `*.pages.dev` address serves the platform and `/health` answers
-- [ ] The custom domain is attached in the dashboard (Workers & Pages → your project → Custom
-      domains) and the certificate is issued
+- [ ] For a custom domain: its zone reports `active` in the account. An attached domain whose
+      zone is still `pending` sits at `status: pending` and resolves nothing, which reads as a
+      broken deployment and is a nameserver at the registrar
+- [ ] The custom domain is attached (Workers & Pages → your project → Custom domains) and its
+      certificate is issued
 - [ ] The `www` host resolves, or is set to redirect to the apex
 - [ ] Every generated link follows the host it is served on: open a payment page on both hosts and
       compare the invoice URL in the status response

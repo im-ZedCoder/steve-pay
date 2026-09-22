@@ -309,7 +309,7 @@ function parseSessionToken(cookieHeader: string | null): string | null {
  * Post-login redirect target.
  *
  * Only same-origin *paths* are honoured. An open redirect here would let an attacker
- * send a merchant a genuine `steve-pay.ir/login?next=https://evil.example` link; the
+ * send a merchant a genuine `steve-gate.ir/login?next=https://evil.example` link; the
  * merchant logs in to the real site and is then handed to a lookalike that asks for
  * their API key. `//host` and `/\host` are rejected too — browsers treat both as
  * protocol-relative or as a backslash-normalised absolute URL.

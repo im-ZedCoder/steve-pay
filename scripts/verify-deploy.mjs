@@ -24,6 +24,14 @@
  * against a stale copy of the intent. Add a fourth cron, forget to deploy it, and this
  * fails — which is the point.
  *
+ * ONE FIELD IS READ TWO WAYS
+ *
+ * A queue consumer names its Worker in `script` in the live API and in `script_name` in
+ * Cloudflare's published response schema. Both are accepted. This was found the only way it
+ * could be: the first version read `script_name` alone and reported a correctly deployed
+ * Worker as missing on a real account — the mock in the self-test had been written from the
+ * same documentation, so it agreed with the bug instead of catching it.
+ *
  * ONE REQUEST PER THING
  *
  * The queue listing returns each queue's consumers inline, so the consumer check needs no
@@ -132,6 +140,15 @@ if (!token || !account) {
 }
 
 /**
+ * The Worker a consumer entry belongs to, under either spelling the API uses for it.
+ *
+ * `script` is what the live endpoints return today; `script_name` is what the published
+ * schema documents. Reading only one of them made this script claim a working deploy was
+ * missing its consumer, which is the failure mode a gate must not have.
+ */
+const consumerWorker = (entry) => entry?.script_name ?? entry?.script ?? null;
+
+/**
  * One authenticated GET.
  *
  * The response body is included in the failure because it is the only place Cloudflare says
@@ -182,13 +199,13 @@ try {
   } else {
     // `consumers` is inline on the queue, so this needs no second request and no queue id.
     const consumers = Array.isArray(found.consumers) ? found.consumers : [];
-    const mine = consumers.filter((entry) => entry.script_name === workerName);
+    const mine = consumers.filter((entry) => consumerWorker(entry) === workerName);
 
     if (mine.length > 0) ok(`queue ${queue} is consumed by ${workerName}`);
     else {
       bad(
         `queue ${queue} has no consumer named ${workerName} \u2014 got: ` +
-          `${consumers.map((entry) => entry.script_name ?? '(unnamed)').join(', ') || 'none'}`,
+          `${consumers.map((entry) => consumerWorker(entry) ?? '(unnamed)').join(', ') || 'none'}`,
       );
     }
 

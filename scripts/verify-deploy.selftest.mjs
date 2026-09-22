@@ -25,6 +25,13 @@
  * fetch calls and its exit code are all the real ones. Nothing about the code under test is
  * replaced.
  *
+ * The mock's payloads are worth as much as its assertions, and they were wrong once: the
+ * consumer entry was written from Cloudflare's documentation (`script_name`), while the live
+ * API returns `script`. The mock therefore agreed with the bug and the check passed here
+ * while reporting a correctly deployed Worker as missing on a real account. So the fixture
+ * now uses the live spelling, and a case below asserts the documented one is accepted too —
+ * the shapes are covered separately rather than assumed to be the same.
+ *
  * Usage:
  *   npm run deploy:verify:test
  */
@@ -77,7 +84,9 @@ function resetQueues() {
       consumers: [
         {
           consumer_id: 'consumer-selftest-00000000000000',
-          script_name: WORKER,
+          // The live spelling. See the note at the top: `script_name` is what the docs say,
+          // and reading only that reported a working deploy as broken.
+          script: WORKER,
           dead_letter_queue: DLQ,
           type: 'worker',
         },
@@ -181,6 +190,20 @@ state.schedulesStatus = 200;
 }
 
 // ---------------------------------------------------------------------------
+section('the documented spelling of the consumer field also passes');
+// ---------------------------------------------------------------------------
+resetQueues();
+state.schedules = [...CRONS];
+state.queues[0].consumers[0].script_name = state.queues[0].consumers[0].script;
+delete state.queues[0].consumers[0].script;
+
+{
+  const { status, output } = await run();
+  check('exits 0 when the API says script_name', status === 0, `got ${status}\n${output}`);
+  check('confirms the consumer', output.includes(`consumed by ${WORKER}`));
+}
+
+// ---------------------------------------------------------------------------
 section('a Worker deployed without one of its cron triggers fails');
 // ---------------------------------------------------------------------------
 state.schedules = CRONS.filter((cron) => cron !== '*/2 * * * *');
@@ -211,7 +234,7 @@ state.queues[0].consumers = [];
 section('a consumer that is a different Worker fails');
 // ---------------------------------------------------------------------------
 resetQueues();
-state.queues[0].consumers[0].script_name = 'some-other-worker';
+state.queues[0].consumers[0].script = 'some-other-worker';
 
 {
   const { status, output } = await run();

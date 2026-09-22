@@ -305,7 +305,16 @@ exact failure this workflow exists to prevent. Turn it off:
 
 The same section is where the production branch lives; it must be `main`, because the
 workflow deploys with `--branch main` and any other value would create a preview deployment
-instead of a production one.
+instead of a production one. The API equivalent of the toggle is `deployments_enabled` and
+`production_deployments_enabled` on the project's `source.config`.
+
+**Why it is worth turning off rather than tolerating.** On this project every Git-triggered
+deployment reached `build: success, deploy: failure` — for commits whose identical artifact
+deployed correctly with `wrangler pages deploy` moments later. Cloudflare's API reports which
+stage failed and not why, so there is nothing to fix from this side; the CLI path the workflow
+uses is the one that works. Left on, it also means every push produces a failed deployment in
+the dashboard, which trains everyone to ignore that screen — and it ships the site without the
+Worker.
 
 ### Verifying by hand
 
@@ -327,11 +336,35 @@ look complete while invoices stop expiring.
 
 ## 7. Custom domain
 
-Nothing in the project needs to change, and nothing needs redeploying.
+Nothing in the project needs to change, nothing needs redeploying, and no file records the
+domain. The domain is attached to the Pages project in the dashboard — Workers & Pages → your
+project → **Custom domains** — or by one call, which is the same thing:
 
-1. Workers & Pages → your project → **Custom domains** → add the domain
-2. Point the DNS record at the project (Cloudflare offers to create it)
-3. Wait for the certificate
+```bash
+curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/steve-pay/domains" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"your-domain.example"}'
+```
+
+### The zone has to be live first, and that is the step people get stuck on
+
+Attaching the domain is instant; making it serve traffic is not. Attach a domain whose zone is
+still `pending` and the Pages domain sits at `status: pending` with `validation_data.method: http`
+and nothing resolves — which looks like a broken deployment and is not one.
+
+```bash
+# the zone must be active, which means its nameservers are the ones Cloudflare assigned
+curl -s "https://api.cloudflare.com/client/v4/zones?name=your-domain.example" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  | python -c "import json,sys; z=json.load(sys.stdin)['result'][0]; print(z['status'], z['name_servers'])"
+```
+
+`pending` means the registrar still has other nameservers (or none). Set the ones printed by
+that command at the registrar, wait for the zone to report `active`, and the certificate and the
+DNS record follow on their own — Cloudflare creates both when the zone is in the same account.
+
+### What follows the host automatically
 
 Every link the platform generates follows the host it is served on, so a payment page opened on the
 new domain returns invoice URLs on that domain and a status poll stays on it. Two things are worth

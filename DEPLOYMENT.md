@@ -260,11 +260,7 @@ The build image's Node version does not need pinning. Nothing in the build path 
 exists for, and the image's Node 22.16 is precisely the version where the old behaviour was
 missing.
 
-A Git-connected project also means every push to `main` deploys the site. That is convenient
-and it does **not** deploy the companion Worker — cron triggers and the queue consumer still
-need `npm run deploy:jobs`, so a workflow that builds on push should run both, in that order.
-
-For local development:
+### For local development
 
 ```bash
 npm run dev   # wrangler dev -c wrangler.worker.jsonc --var ENVIRONMENT:development
@@ -275,7 +271,61 @@ directory, so a single `wrangler dev` serves both the routes and the static file
 
 ---
 
-## 6. Custom domain
+## 6. Continuous deployment
+
+`.github/workflows/deploy.yml` deploys both halves on every push to `main`, and refuses to
+finish until the account confirms both arrived:
+
+```
+typecheck → lint → tests → self-tests → build
+         → wrangler pages deploy dist-pages   (the site)
+         → wrangler deploy -c wrangler.worker.jsonc   (cron + queue)
+         → npm run deploy:verify              (ask Cloudflare what is live)
+```
+
+Two repository secrets are required, and the token is the same one `npm run cf:setup` uses:
+
+| Secret | Value |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | Workers Scripts: Edit, Cloudflare Pages: Edit, Queues: Edit |
+| `CLOUDFLARE_ACCOUNT_ID` | the account id |
+
+An optional repository **variable** `STEVE_PAY_HOST` (the custom domain, once you have one)
+makes the verification also check `<host>/health`. Nothing depends on it: the platform has no
+configured hostname, so the check is skipped when it is unset.
+
+### Turn off Cloudflare's own builds first
+
+A Git-connected Pages project builds on every push by itself. Left on, it ships the site
+before the workflow has run its tests and **without** the companion Worker — which is the
+exact failure this workflow exists to prevent. Turn it off:
+
+> Pages project → Settings → Builds & deployments → Configure Production deployments →
+> Automatic deployments: **Disabled**
+
+The same section is where the production branch lives; it must be `main`, because the
+workflow deploys with `--branch main` and any other value would create a preview deployment
+instead of a production one.
+
+### Verifying by hand
+
+The last step of the workflow is a script, so it runs anywhere:
+
+```bash
+npm run deploy:verify                    # cron triggers, queue consumer, dead-letter queue
+npm run deploy:verify -- --host https://pay.example.com   # and the site's /health
+npm run deploy:verify:test               # prove the check itself can fail
+```
+
+It reads the worker name, the cron list, the queue and the dead-letter queue out of
+`wrangler.worker.jsonc`, so it can never pass against a stale copy of what the config asks
+for. It exits non-zero if any configured cron trigger is not scheduled on the deployed
+Worker, or if the webhook queue's consumer is not that Worker — the two ways a deploy can
+look complete while invoices stop expiring.
+
+---
+
+## 7. Custom domain
 
 Nothing in the project needs to change, and nothing needs redeploying.
 
@@ -301,7 +351,7 @@ preview URL as a window onto live data.
 
 ---
 
-## 7. Cron Triggers
+## 8. Cron Triggers
 
 Declared in `wrangler.worker.jsonc`, and they are the reason the platform does not need a worker
 process. They do **not** run on the Pages project:
@@ -320,7 +370,7 @@ npx wrangler tail -c wrangler.worker.jsonc --format json | grep '"surface":"cron
 
 ---
 
-## 8. Turnstile
+## 9. Turnstile
 
 1. Create a widget in the Cloudflare dashboard. Add the hostname you deployed on — the
    `*.pages.dev` address works for testing and can be swapped for the custom domain later
@@ -335,7 +385,7 @@ and only that page.
 
 ---
 
-## 9. Observability
+## 10. Observability
 
 Observability is enabled in both configs with full sampling. Every response carries a request ID,
 and every log line includes it, so a merchant's quoted ID lines up with the logs.
@@ -356,7 +406,7 @@ curl -s https://your-host/health
 
 ---
 
-## 10. Backups
+## 11. Backups
 
 D1 has point-in-time recovery on paid plans. For a portable export:
 

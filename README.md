@@ -141,6 +141,19 @@ npm run cf:setup -- --env production --yes # do all of it
 npm run cf:setup:test                      # verify the script against a mock API
 ```
 
+Afterwards, the two halves deploy and are then checked against the account:
+
+```bash
+npm run deploy           # build + deploy the Pages site
+npm run deploy:jobs      # deploy the companion Worker (cron triggers + queue consumer)
+npm run deploy:verify    # assert both are live; non-zero exit if either is not
+npm run deploy:verify:test  # prove that check can fail, not only pass
+```
+
+`.github/workflows/deploy.yml` runs the whole sequence on every push to `main` — checks
+first, then the site, then the Worker, then the verification — so a push cannot ship code
+whose cron triggers and queue consumer did not arrive with it.
+
 One command creates the D1 database, the KV namespace, the queues and the Pages project, writes
 their ids into `wrangler.jsonc` and `wrangler.worker.jsonc`, applies migrations and seeds,
 generates and pushes the secrets to both, deploys the site and then the companion Worker, and

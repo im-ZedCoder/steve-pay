@@ -1,0 +1,195 @@
+name: Deploy
+
+# The site and the companion Worker deploy together, in that order, and the run does not
+# pass until the Cloudflare account agrees that both arrived.
+#
+# This workflow exists because the platform is two projects. The Pages project answers every
+# request; the companion Worker owns the cron triggers and the webhook queue consumer. Split
+# those across two tools and you get the failure that is hardest to notice: the site goes up,
+# the Worker does not, every page renders, payments are taken — and nothing expires an
+# invoice, so each one holds its unique payable amount claimed forever until the suffix
+# space that makes amounts unique runs out. Days later, new payments stop being creatable.
+#
+# So the order here is deliberate and each step is load-bearing:
+#
+#   1. Nothing deploys until typecheck, lint, the test suite, and both provisioning
+#      self-tests pass.
+#   2. The site deploys first. Its deploy is what creates the queue producer, so the
+#      consumer must not go up before it exists.
+#   3. The Worker deploys second, and its failure fails the run.
+#   4. `npm run deploy:verify` then asks the account whether the three cron schedules exist
+#      on the deployed Worker and whether the webhook queue's consumer is that Worker with
+#      the configured dead-letter queue. That script has its own self-test, so a gate that
+#      always says yes cannot pass as this one.
+#
+# ONE DASHBOARD SETTING HAS TO MATCH
+#
+# A Git-connected Pages project builds on every push by itself, which would ship the site
+# before these checks run and without the Worker. Turn it off:
+#   Pages project → Settings → Builds & deployments → Configure Production deployments →
+#   Automatic deployments: Disabled
+# This workflow is then the only deploy path.
+#
+# SECRETS
+#
+#   CLOUDFLARE_API_TOKEN   Account → Workers Scripts: Edit, Cloudflare Pages: Edit,
+#                          Queues: Edit (the token `npm run cf:setup` needs also works)
+#   CLOUDFLARE_ACCOUNT_ID  the account id
+#
+# An optional repository *variable* `STEVE_PAY_HOST` (e.g. the custom domain) makes the
+# verification also check `<host>/health`. Nothing depends on it: the platform deliberately
+# has no configured hostname, so the check is skipped when the variable is unset.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# One deploy at a time. `cancel-in-progress: false` on purpose: a Pages deploy killed
+# halfway leaves the project on the previous deployment, and the verification step — the one
+# that would have told you so — never runs.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The Pages build image runs Node 22, so CI runs the same major rather than the newest —
+  # the two environments disagreeing about the runtime is how the build passed on a
+  # developer's machine and failed in the deploy environment.
+  #
+  # `--no-experimental-strip-types` is the other half of that: it forbids the runtime from
+  # stripping types on import, so nothing can quietly start depending on a Node feature the
+  # deploy environment does not have. `scripts/import-ts.mjs` is what exists for that.
+  NODE_OPTIONS: --no-experimental-strip-types
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Provisioning script self-test
+        run: npm run cf:setup:test
+
+      - name: Deploy verification self-test
+        run: npm run deploy:verify:test
+
+      - name: Build the Pages bundle
+        run: npm run build
+
+  deploy:
+    name: Deploy
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Creates the environment on first run with no protection rules. It is named here so
+    # that requiring a reviewer before production deploys is a setting in one place rather
+    # than a change to this file.
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      STEVE_PAY_HOST: ${{ vars.STEVE_PAY_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, so the migration note below can diff this push.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      # Before anything is built. Without the token every later step fails anyway, and it
+      # fails as an authentication error from inside wrangler rather than as the one line
+      # that says which secret is missing. A deploy workflow that goes red because it could
+      # not deploy is the honest outcome; one that quietly skips is the failure this whole
+      # file exists to prevent.
+      - name: Check credentials are configured
+        run: |
+          missing=''
+          [ -z "$CLOUDFLARE_API_TOKEN" ] && missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -z "$CLOUDFLARE_ACCOUNT_ID" ] && missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing."
+            echo 'Add them under Settings → Secrets and variables → Actions, or with:'
+            echo '  gh secret set CLOUDFLARE_API_TOKEN'
+            echo '  gh secret set CLOUDFLARE_ACCOUNT_ID'
+            exit 1
+          fi
+          echo 'Credentials present.'
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the Pages bundle
+        run: npm run build
+
+      # First, and it matters. The Pages deploy is what pushes the bindings into the project
+      # and creates the queue producer; a consumer deployed ahead of it would be bound to a
+      # queue nothing writes to, and a failed site deploy would look like a successful one.
+      # `--branch main` must equal the project's production branch (Settings → Builds &
+      # deployments → Production branch), or this creates a preview deployment instead.
+      - name: Deploy the site (Cloudflare Pages)
+        run: >-
+          npx wrangler pages deploy dist-pages
+          --no-bundle
+          --project-name steve-pay
+          --branch main
+
+      - name: Deploy the companion Worker (cron triggers + queue consumer)
+        run: npx wrangler deploy -c wrangler.worker.jsonc
+
+      # The point of the whole run. Exits non-zero if any configured cron trigger is not
+      # scheduled, or if the webhook queue is not consumed by that Worker.
+      - name: Verify the cron triggers and queue consumer are live
+        run: npm run deploy:verify
+
+      - name: Note a migration this push touched
+        if: >-
+          github.event_name == 'push' &&
+          github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # Informational, and never allowed to fail the deploy: the schema is applied
+          # deliberately, because a migration that is not backward compatible has to be
+          # sequenced by hand. This only makes sure nobody forgets it exists.
+          changed=$(git diff --name-only "$BEFORE" "$AFTER" -- migrations || true)
+          if [ -z "$changed" ]; then
+            exit 0
+          fi
+          {
+            echo '### Migrations changed by this push'
+            echo
+            echo '```'
+            echo "$changed"
+            echo '```'
+            echo
+            echo 'Not applied automatically. Run `npm run db:migrate:remote` — and keep them'
+            echo 'backward compatible for one release, so a rollback still works.'
+          } >> "$GITHUB_STEP_SUMMARY" || true

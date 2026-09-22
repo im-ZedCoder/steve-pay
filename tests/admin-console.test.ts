@@ -380,9 +380,20 @@ describe('operator console (§28, §29, §54)', () => {
       { userId: ADMIN_ID, role: 'SUPER_ADMIN', ip: null },
     );
 
-    // Anonymous: the console is not a public surface.
+    // Anonymous: the console is not a public surface, and an operator who is not signed in
+    // is sent to the form that signs them in — with their destination, and to the *admin*
+    // variant of it — rather than to a 401 page that offers them nothing to do next.
     const anonymous = await SELF.fetch('https://steve-pay.test/admin', { redirect: 'manual' });
-    expect(anonymous.status).toBe(401);
+    expect(anonymous.status).toBe(302);
+    expect(anonymous.headers.get('location')).toBe('/login?scope=admin&next=%2Fadmin');
+
+    for (const path of ['/admin/users', '/admin/review', '/admin/audit-logs', '/admin/revenue']) {
+      const response = await SELF.fetch(`https://steve-pay.test${path}`, { redirect: 'manual' });
+      expect(response.status, `${path} must redirect a signed-out browser`).toBe(302);
+      expect(response.headers.get('location')).toBe(
+        `/login?scope=admin&next=${encodeURIComponent(path)}`,
+      );
+    }
 
     const login = await SELF.fetch('https://steve-pay.test/login');
     const loggedIn = await SELF.fetch('https://steve-pay.test/login', {

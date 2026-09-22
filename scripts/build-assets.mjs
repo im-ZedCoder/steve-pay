@@ -20,22 +20,20 @@
  * linted and typechecked alongside the code that renders the elements it targets.
  * This script only copies it out; it never rewrites it.
  *
- * Node strips the TypeScript types on import (stable since Node 23.6, still spelled
- * `--experimental-strip-types` on older runtimes). `src/ui/theme.ts` has no imports
- * of its own, so there is nothing else to resolve.
+ * The types are stripped by `scripts/import-ts.mjs` rather than by the runtime. Node would
+ * do it, but only from 22.18 onwards, and the Cloudflare Pages build image runs 22.16 —
+ * where this import is what broke the deploy. See that file for the whole account.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { importTypeScript } from './import-ts.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUT_DIR = join(ROOT, 'public', 'assets');
 const OUT_FILE = join(OUT_DIR, 'client.js');
 
-// `pathToFileURL`, not the bare path: on Windows an absolute specifier like `F:\...` is
-// rejected by the ESM loader as an unsupported URL scheme, so `import()` has to be given
-// a real `file://` URL. This is the whole reason the script works on one OS and not the other.
-const { CLIENT_JS } = await import(pathToFileURL(join(ROOT, 'src', 'ui', 'theme.ts')).href);
+const { CLIENT_JS } = await importTypeScript(join(ROOT, 'src', 'ui', 'theme.ts'));
 
 if (typeof CLIENT_JS !== 'string' || CLIENT_JS.trim().length === 0) {
   console.error('assets: CLIENT_JS is missing or empty; refusing to write an empty script');

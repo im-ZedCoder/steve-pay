@@ -20,9 +20,10 @@
 
 import type { RouteContext } from '../app';
 import { servicesFor, type Services } from './container';
-import { AppError } from '../core/errors';
+import { AppError, isAppError } from '../core/errors';
 import { SESSION_COOKIE_NAME, parseCookies } from '../core/cookies';
 import { CSRF_FIELD, assertCsrf, issueCsrf } from '../core/csrf';
+import { redirect } from '../core/http';
 import { hasPermission, isAdminRole, type Permission, type Role } from '../core/roles';
 import type { UserRow } from '../services/auth';
 
@@ -127,6 +128,44 @@ export async function requirePermission(c: RouteContext, permission: Permission)
   return session;
 }
 
+/**
+ * Turns "nobody is signed in" into a trip to the login form, and returns null for every
+ * other failure so the caller can rethrow it.
+ *
+ * The guards throw rather than redirect on purpose: the same `requireSession` protects the
+ * machine API, where a 302 to an HTML form is the wrong answer and a 401 is the right one.
+ * A *browser* hitting a console page is the opposite case — the error page they would
+ * otherwise get says "you must be signed in" without offering anywhere to sign in — so the
+ * two consoles translate that one code at their edge.
+ *
+ * Both consoles call this, and that is the point of it existing. The admin console was
+ * returning the raw 401 for a long time after the merchant console started redirecting,
+ * because the rule was written out twice and only ever fixed in one of them.
+ *
+ * Only UNAUTHENTICATED and SESSION_EXPIRED are translated. A signed-in merchant who opens
+ * `/admin` gets the 403 that says so: they are not signed out, and sending them to a login
+ * form they are already past would loop.
+ *
+ * `scope` selects which form they land on. The admin console passes `admin` so an operator
+ * gets the admin sign-in rather than the merchant one.
+ */
+export function signedOutRedirect(
+  c: RouteContext,
+  error: unknown,
+  scope?: 'admin',
+): Response | null {
+  if (!isAppError(error)) return null;
+  if (error.code !== 'UNAUTHENTICATED' && error.code !== 'SESSION_EXPIRED') return null;
+
+  const params = new URLSearchParams();
+  if (scope === 'admin') params.set('scope', 'admin');
+  // Path only, never the full URL: `safeNext` on the login page accepts a relative path and
+  // rejects anything else, so a value it cannot use would silently drop the destination.
+  params.set('next', new URL(c.req.url).pathname);
+
+  return redirect(`/login?${params.toString()}`, 302);
+}
+
 // ---------------------------------------------------------------------------
 // Forms
 // ---------------------------------------------------------------------------
@@ -149,7 +188,7 @@ export async function readForm(c: RouteContext): Promise<FormResult> {
   const raw = (await c.req.parseBody()) as Record<string, unknown>;
   await assertCsrf(c.req.header('cookie') ?? null, raw[CSRF_FIELD]);
 
-  const csrf = await issueCsrf(context.config.isProduction);
+  const csrf = await issueCsrf(context.secure);
 
   const value = (key: string): string => {
     const found = raw[key];
@@ -167,10 +206,17 @@ export function withCsrfCookie(response: Response, cookie: string): Response {
   return response;
 }
 
-/** Issues a token and cookie for a GET that renders a form. */
+/**
+ * Issues a token and cookie for a GET that renders a form.
+ *
+ * `context.secure`, never `context.config.isProduction`: the `Secure` attribute is a fact
+ * about the connection, and a cookie the browser refuses to store is a form that can never
+ * be submitted. Marking it by environment name breaks every POST on a deployment that is
+ * labelled production but answered over plain HTTP.
+ */
 export async function csrfForGet(c: RouteContext): Promise<{ token: string; cookie: string }> {
   const context = c.get('appContext');
-  const issued = await issueCsrf(context.config.isProduction);
+  const issued = await issueCsrf(context.secure);
   return { token: issued.token, cookie: issued.cookie };
 }
 

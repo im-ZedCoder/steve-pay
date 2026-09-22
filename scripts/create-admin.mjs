@@ -11,6 +11,10 @@
  * here would be a second thing to keep in sync, and the first time they drifted the
  * admin would simply be unable to log in, with no error to explain why.
  *
+ * Those two modules are `.ts`, and they are loaded through `scripts/import-ts.mjs` so the
+ * command works on every Node the project claims to support, not only the ones that strip
+ * types on import.
+ *
  * Usage:
  *   npm run admin:create                       # local D1, interactive
  *   npm run admin:create -- --mobile 0912... --role ADMIN
@@ -25,15 +29,16 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { importTypeScript } from './import-ts.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 // --- the real implementations, not copies ------------------------------------
-const { hashPassword } = await import(pathToFileURL(join(ROOT, 'src', 'core', 'crypto.ts')).href);
-const { id: newId } = await import(pathToFileURL(join(ROOT, 'src', 'core', 'ids.ts')).href);
+const { hashPassword } = await importTypeScript(join(ROOT, 'src', 'core', 'crypto.ts'));
+const { id: newId } = await importTypeScript(join(ROOT, 'src', 'core', 'ids.ts'));
 
 /**
  * The database to write to.

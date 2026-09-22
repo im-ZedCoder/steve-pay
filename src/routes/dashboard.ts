@@ -36,7 +36,7 @@ import {
   type InvoiceStatus,
   type StatusFilter,
 } from '../core/state-machine';
-import { AppError, isAppError } from '../core/errors';
+import { AppError } from '../core/errors';
 import { CSRF_FIELD } from '../core/csrf';
 import { absoluteUrl } from '../core/origin';
 import { bankCardFace } from '../ui/bank-card';
@@ -46,6 +46,7 @@ import {
   messageFor,
   readForm,
   requireMerchant,
+  signedOutRedirect,
   withCsrfCookie,
   type ResolvedSession,
 } from './session';
@@ -182,18 +183,15 @@ async function render(c: RouteContext, input: PageInput, build: PageBuilder): Pr
   const url = new URL(c.req.url);
 
   // A signed-out browser navigation goes to the login form, carrying where it was headed.
-  //
-  // `requireMerchant` deliberately throws rather than redirecting, because the same guard
-  // protects the API routes where a 302 is the wrong answer. The console is the opposite
-  // case: an expired session there is a person with a stale tab, and the error page they
-  // would otherwise get says "you must sign in" without offering anywhere to do it.
+  // `signedOutRedirect` owns that rule for both consoles — see the note on it. Anything
+  // else `requireMerchant` raises is rethrown, including the status errors that a merchant
+  // whose account is not in good standing should be shown rather than redirected away.
   let session: ResolvedSession;
   try {
     session = await requireMerchant(c);
   } catch (error) {
-    if (isAppError(error) && (error.code === 'UNAUTHENTICATED' || error.code === 'SESSION_EXPIRED')) {
-      return redirect(`/login?next=${encodeURIComponent(url.pathname)}`, 302);
-    }
+    const signedOut = signedOutRedirect(c, error);
+    if (signedOut) return signedOut;
     throw error;
   }
 

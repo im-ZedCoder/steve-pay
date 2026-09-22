@@ -35,7 +35,15 @@ import { INVOICE_STATUSES, type InvoiceStatus } from '../core/state-machine';
 import { hasPermission, type Permission, type Role } from '../core/roles';
 import { AppError } from '../core/errors';
 import { CSRF_FIELD } from '../core/csrf';
-import { requirePermission, readForm, csrfForGet, withCsrfCookie, messageFor } from './session';
+import {
+  requirePermission,
+  readForm,
+  csrfForGet,
+  withCsrfCookie,
+  messageFor,
+  signedOutRedirect,
+  type ResolvedSession,
+} from './session';
 import { adminShell, alert, badge, emptyState, ident, panel, sparkline, stat } from '../ui/layout';
 import { ReportingService } from '../services/reporting';
 import { confirmPayment } from '../services/confirm';
@@ -102,7 +110,21 @@ async function renderAdmin(
   build: (csrf: string) => string | Promise<string>,
 ): Promise<Response> {
   const url = new URL(c.req.url);
-  const session = await requirePermission(c, input.permission);
+
+  // An operator who is not signed in goes to the admin login form with their destination,
+  // rather than to an error page that says a session is required and offers no way to get
+  // one. A signed-in merchant opening this path is a different answer — they get the 403 —
+  // and `signedOutRedirect` draws that line, so this console and the merchant one cannot
+  // disagree about it again.
+  let session: ResolvedSession;
+  try {
+    session = await requirePermission(c, input.permission);
+  } catch (error) {
+    const signedOut = signedOutRedirect(c, error, 'admin');
+    if (signedOut) return signedOut;
+    throw error;
+  }
+
   const context = c.get('appContext');
 
   const pendingReview = await first<{ count: number }>(

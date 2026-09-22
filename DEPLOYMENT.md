@@ -244,6 +244,26 @@ npx wrangler pages deployment list --project-name steve-pay
 A missing binding is the most common deployment failure, and a producer bound to a queue with no
 consumer is the quietest one.
 
+### If the Pages project is connected to Git
+
+A Git-connected Pages project builds on Cloudflare's own machines, and it has its own idea
+of how to build this repository. It needs two settings, and the defaults are wrong for this
+project:
+
+| Setting | Value | Why |
+|---|---|---|
+| Build command | `npm run build` | Assembling `dist-pages/` is what `wrangler pages deploy` uploads, so this is the same command the CLI path runs |
+| Build output directory | `dist-pages` | `wrangler.jsonc` declares it as `pages_build_output_dir`, which Pages reads, but an explicit value in the dashboard wins — and the default (`public`) would deploy the raw asset folder as the whole site |
+
+The build image's Node version does not need pinning. Nothing in the build path imports a
+`.ts` file and relies on the runtime to strip it — that is what `scripts/import-ts.mjs`
+exists for, and the image's Node 22.16 is precisely the version where the old behaviour was
+missing.
+
+A Git-connected project also means every push to `main` deploys the site. That is convenient
+and it does **not** deploy the companion Worker — cron triggers and the queue consumer still
+need `npm run deploy:jobs`, so a workflow that builds on push should run both, in that order.
+
 For local development:
 
 ```bash

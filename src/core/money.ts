@@ -1,7 +1,7 @@
 /**
  * Money.
  *
- * Every amount in Steve Pay is an integer number of Toman. There is no float
+ * Every amount in Steve Gate is an integer number of Toman. There is no float
  * anywhere in the money path: Toman has no sub-unit in practice, and a float that
  * can represent 0.1 inexactly has no business near a payment total.
  *

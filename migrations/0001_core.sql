@@ -1,5 +1,5 @@
 -- =============================================================================
--- Steve Pay — migration 0001: identity, access, settings, audit
+-- Steve Gate — migration 0001: identity, access, settings, audit
 -- =============================================================================
 -- Conventions used across every migration:
 --   * All money is INTEGER Toman. No REAL columns exist anywhere in this schema.

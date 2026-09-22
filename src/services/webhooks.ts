@@ -37,7 +37,46 @@ import type { Logger } from '../obs/logger';
  * it that does not resolve is worse than leaving the product name alone.
  */
 function webhookUserAgent(origin: string): string {
-  return origin.length > 0 ? `StevePay-Webhooks/1.0 (+${origin})` : 'StevePay-Webhooks/1.0';
+  // Renamed outright, unlike the `x-steve*-signature` headers above: a `User-Agent` is not
+  // part of the documented contract and no verification reads it, so there is nothing to
+  // keep emitting the old spelling for. A receiver that logs it should see the product that
+  // actually called it.
+  return origin.length > 0 ? `SteveGate-Webhooks/1.0 (+${origin})` : 'SteveGate-Webhooks/1.0';
+}
+
+/**
+ * The headers a delivery carries.
+ *
+ * Both the new spelling and the previous one, with identical values — the platform renamed
+ * itself, and a merchant's verification code is the one part of that rename we cannot
+ * change for them.
+ *
+ * Built here rather than inline at the `fetch` call so the pair can be asserted without
+ * standing up an endpoint to receive it. Deleting one line of a duplicated header block is
+ * an easy edit to make and an impossible one to notice, and what it breaks is somebody
+ * else's production integration.
+ */
+export function webhookHeaders(input: {
+  signature: string;
+  event: string;
+  timestamp: string;
+  deliveryId: string;
+  attempt: number;
+}): Record<string, string> {
+  const values: Record<string, string> = {
+    signature: input.signature,
+    event: input.event,
+    timestamp: input.timestamp,
+    delivery: input.deliveryId,
+    attempt: String(input.attempt),
+  };
+
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(values)) {
+    headers[`x-stevegate-${name}`] = value;
+    headers[`x-stevepay-${name}`] = value;
+  }
+  return headers;
 }
 
 export const WEBHOOK_EVENTS = [
@@ -116,7 +155,7 @@ export class WebhookService {
    *
    * May be empty: the queue consumer and the cron sweeper run without a request, and
    * only learn the origin from the value a request recorded in KV. As a caller-supplied
-   * contact URL it degrades to a bare `StevePay-Webhooks/1.0`, which is still a valid
+   * contact URL it degrades to a bare `SteveGate-Webhooks/1.0`, which is still a valid
    * user-agent — unlike a placeholder host, which would tell a merchant's operator to
    * look somewhere that does not exist.
    */
@@ -557,11 +596,16 @@ export class WebhookService {
         headers: {
           'content-type': 'application/json',
           'user-agent': webhookUserAgent(this.origin),
-          'x-stevepay-signature': signature,
-          'x-stevepay-event': delivery.event,
-          'x-stevepay-timestamp': timestamp,
-          'x-stevepay-delivery': delivery.id,
-          'x-stevepay-attempt': String(attemptNumber),
+          // Both spellings, deliberately, for one transition window. The pair carries the
+          // *same* value, so this is a duplicate rather than a second format: an integrator
+          // reads whichever they know, and nobody verifies two signatures.
+          ...webhookHeaders({
+            signature,
+            event: delivery.event,
+            timestamp,
+            deliveryId: delivery.id,
+            attempt: attemptNumber,
+          }),
         },
         body: delivery.payload,
       });

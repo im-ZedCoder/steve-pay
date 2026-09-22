@@ -300,7 +300,7 @@ export const PAY_CSS = `${TOKEN_VARS}${FONT_FACES_PAY}${RESET}${TYPE}${MOTION}
 .pay-wrap{min-height:100dvh;display:flex;flex-direction:column;align-items:center;
 justify-content:center;padding:1.5rem 1rem 2.5rem;gap:.875rem;position:relative}
 /*
- * The glass card, and the top edge is the one element of Steve Pay's own language
+ * The glass card, and the top edge is the one element of Steve Gate's own language
  * that survives the re-skin: a 2px line in the payment's state colour, lit by a
  * travelling highlight. That is decoration carrying information — the colour of the
  * card's edge is the state of the payment — which is why it earns its place above the

@@ -45,7 +45,7 @@ if (typeof CLIENT_JS !== 'string' || CLIENT_JS.trim().length === 0) {
  * newline is trimmed rather than stripped globally, so a blank line inside the source
  * still reads as a line break in the generated file.
  */
-const banner = `/* Steve Pay client script. Generated from src/ui/theme.ts by scripts/build-assets.mjs.\n   Do not edit public/assets/client.js directly — edit CLIENT_JS and re-run \`npm run assets\`. */\n`;
+const banner = `/* Steve Gate client script. Generated from src/ui/theme.ts by scripts/build-assets.mjs.\n   Do not edit public/assets/client.js directly — edit CLIENT_JS and re-run \`npm run assets\`. */\n`;
 
 const body = `${banner}${CLIENT_JS.trimStart()}`;
 

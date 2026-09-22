@@ -202,7 +202,7 @@ infrastructure rather than a void. The amount is set in tabular figures at displ
 the exact figure is the thing a human must check digit by digit against their bank screen.
 
 **The receipt shows the bank's own message**, redacted. It is the product's entire claim made
-visible in one object: Steve Pay works by reading your bank's SMS, so here is the SMS it read.
+visible in one object: Steve Gate works by reading your bank's SMS, so here is the SMS it read.
 
 Redaction happens in the layer that owns the raw message (`SmsService.publicConfirmationMessage`),
 never at render time — so no future markup change can leak a card number or a balance. The raw

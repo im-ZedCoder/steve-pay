@@ -82,6 +82,7 @@ export type AuditEvent =
   | 'webhook.disabled'
   // platform
   | 'settings.updated'
+  | 'settings.telegram_updated'
   | 'notification.sent'
   | 'ticket.created'
   | 'ticket.replied'

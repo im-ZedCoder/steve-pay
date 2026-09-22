@@ -14,7 +14,8 @@ import type { Hono } from 'hono';
 import type { AppEnv, RouteContext } from '../app';
 import { servicesFor } from './container';
 import { html, redirect } from '../core/http';
-import { AppError } from '../core/errors';
+import { AppError, isAppError } from '../core/errors';
+import { errorFields } from '../obs/logger';
 import { SESSION_COOKIE_NAME, clearCookie, sessionCookie } from '../core/cookies';
 import { CSRF_FIELD, assertCsrf, issueCsrf } from '../core/csrf';
 import { loginPage, registerPage, registeredPage } from '../ui/pages/auth';
@@ -224,6 +225,19 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
       );
       return response;
     } catch (error) {
+      // The client is told one thing and nothing more — deliberately, because naming the
+      // difference between an unknown number and a wrong password is an enumeration oracle.
+      // The operator is told the truth, though. A login rejected for its credential is
+      // already recorded by the service as `auth.login_failed`, so the warn below names the
+      // code and stops there; anything *else* is a defect, and it writes no audit row, no
+      // session and no attempt — which is why "nobody can sign in" was otherwise a symptom
+      // with no evidence on any surface at once.
+      if (isAppError(error)) {
+        context.logger.warn('login.rejected', { mobile, code: error.code });
+      } else {
+        context.logger.error('login.unexpected', { mobile, ...errorFields(error) });
+      }
+
       const csrf = await issueCsrf(context.secure);
       const response = html(
         addCsrf(

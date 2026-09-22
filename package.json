@@ -1,8 +1,8 @@
 {
-  "name": "steve-pay",
+  "name": "steve-gate",
   "version": "1.0.0",
   "private": true,
-  "description": "Steve Pay — a card-transfer payment gateway for Iranian banks, running entirely on Cloudflare's edge.",
+  "description": "Steve Gate — a card-transfer payment gateway for Iranian banks, running entirely on Cloudflare's edge.",
   "type": "module",
   "engines": {
     "node": ">=20"

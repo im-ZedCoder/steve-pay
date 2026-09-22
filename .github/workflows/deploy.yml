@@ -36,7 +36,7 @@ name: Deploy
 #                          Queues: Edit (the token `npm run cf:setup` needs also works)
 #   CLOUDFLARE_ACCOUNT_ID  the account id
 #
-# An optional repository *variable* `STEVE_PAY_HOST` (e.g. the custom domain) makes the
+# An optional repository *variable* `STEVE_GATE_HOST` (e.g. the custom domain) makes the
 # verification also check `<host>/health`. Nothing depends on it: the platform deliberately
 # has no configured hostname, so the check is skipped when the variable is unset.
 
@@ -111,7 +111,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      STEVE_PAY_HOST: ${{ vars.STEVE_PAY_HOST }}
+      STEVE_GATE_HOST: ${{ vars.STEVE_GATE_HOST }}
     steps:
       - uses: actions/checkout@v4
         with:

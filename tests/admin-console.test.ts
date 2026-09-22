@@ -23,11 +23,12 @@ import { describe, expect, it } from 'vitest';
 
 import { servicesFor, type ServiceContext } from '../src/routes/container';
 import { createLogger } from '../src/obs/logger';
-import { resolveConfig } from '../src/env';
+import { resolveConfig, resolveSecrets } from '../src/env';
 import { id as newId } from '../src/core/ids';
-import { hashPassword } from '../src/core/crypto';
+import { hashPassword, unseal } from '../src/core/crypto';
 import { nowIso } from '../src/core/time';
 import { toPersianDigits } from '../src/core/digits';
+import { TELEGRAM_SEAL_PURPOSE } from '../src/services/telegram';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -59,15 +60,59 @@ const ADMIN_PASSWORD = 'Admin-Placeholder-9';
 const MERCHANT_MOBILE = '09120000042';
 const MERCHANT_PASSWORD = 'Correct-Horse-9';
 
-async function ensureAdmin(): Promise<void> {
-  const existing = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(ADMIN_ID).first();
-  if (existing) return;
+const SECONDARY_ID = 'usr_01TESTSECONDADMIN000000';
+const SECONDARY_MOBILE = '09000000001';
+const SECONDARY_PASSWORD = 'Second-Admin-9';
+const SECONDARY_ROTATED = 'Rotated-Passphrase-7';
+
+const SUPPORT_ID = 'usr_01TESTSUPPORT0000000000';
+const SUPPORT_MOBILE = '09000000002';
+const SUPPORT_PASSWORD = 'Support-Agent-9';
+
+/**
+ * Creates a member of staff, or puts an existing one back to a known credential.
+ *
+ * The reset on every run is not belt-and-braces: this suite shares one database, and the
+ * password-change test below rotates a password. Without the reset, running the file twice
+ * would fail in the second run for a reason the second run did not cause.
+ */
+async function ensureUser(
+  id: string,
+  mobile: string,
+  password: string,
+  role: 'SUPER_ADMIN' | 'SUPPORT',
+  displayName: string,
+): Promise<void> {
+  const passwordHash = await hashPassword(password);
+  const existing = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(id).first();
+  if (existing) {
+    await env.DB.prepare(
+      "UPDATE users SET password_hash = ?, must_change_password = 0, status = 'ACTIVE' WHERE id = ?",
+    )
+      .bind(passwordHash, id)
+      .run();
+    return;
+  }
   await env.DB.prepare(
     `INSERT INTO users (id, mobile, password_hash, role, status, display_name, created_at, updated_at)
-     VALUES (?, ?, ?, 'SUPER_ADMIN', 'ACTIVE', 'Test Admin', ?, ?)`,
+     VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
   )
-    .bind(ADMIN_ID, ADMIN_MOBILE, await hashPassword(ADMIN_PASSWORD), nowIso(), nowIso())
+    .bind(id, mobile, passwordHash, role, displayName, nowIso(), nowIso())
     .run();
+}
+
+async function ensureAdmin(): Promise<void> {
+  await ensureUser(ADMIN_ID, ADMIN_MOBILE, ADMIN_PASSWORD, 'SUPER_ADMIN', 'Test Admin');
+}
+
+/** A second operator, so rotating a password cannot lock the shared admin out of this file. */
+async function ensureSecondaryAdmin(): Promise<void> {
+  await ensureUser(SECONDARY_ID, SECONDARY_MOBILE, SECONDARY_PASSWORD, 'SUPER_ADMIN', 'Second Admin');
+}
+
+/** An operator whose role may answer questions but not change platform configuration. */
+async function ensureSupportAdmin(): Promise<void> {
+  await ensureUser(SUPPORT_ID, SUPPORT_MOBILE, SUPPORT_PASSWORD, 'SUPPORT', 'Support Agent');
 }
 
 function cookiesOf(response: Response): string {
@@ -125,11 +170,12 @@ function luhnValid(prefix: string): string {
   throw new Error('no Luhn check digit found');
 }
 
-async function adminSession(): Promise<string> {
+/** Posts the admin login form. Left un-asserted so a test can check that a password *fails*. */
+async function attemptAdminSignIn(mobile: string, password: string): Promise<Response> {
   const login = await SELF.fetch('https://steve-pay.test/login?scope=admin');
   expect(login.status).toBe(200);
 
-  const response = await SELF.fetch('https://steve-pay.test/login?scope=admin', {
+  return SELF.fetch('https://steve-pay.test/login?scope=admin', {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -137,16 +183,23 @@ async function adminSession(): Promise<string> {
     },
     body: new URLSearchParams({
       _csrf: csrfFrom(await login.text()),
-      mobile: ADMIN_MOBILE,
-      password: ADMIN_PASSWORD,
+      mobile,
+      password,
     }).toString(),
     redirect: 'manual',
   });
+}
 
-  expect(response.status).toBe(303);
+async function signInAdmin(mobile: string, password: string): Promise<string> {
+  const response = await attemptAdminSignIn(mobile, password);
+  expect(response.status, `sign in as ${mobile}`).toBe(303);
   const session = cookiesOf(response);
   expect(session).toContain('sp_session=');
   return session;
+}
+
+async function adminSession(): Promise<string> {
+  return signInAdmin(ADMIN_MOBILE, ADMIN_PASSWORD);
 }
 
 /**
@@ -561,5 +614,156 @@ describe('operator console (§28, §29, §54)', () => {
 
     // Nothing that looks like a secret may appear on an audit page.
     expect(html).not.toContain('sk_live_');
+  });
+
+  it('changes an operator password from the console and closes their other sessions', async () => {
+    await ensureSecondaryAdmin();
+    const session = await signInAdmin(SECONDARY_MOBILE, SECONDARY_PASSWORD);
+    const form = await openForm('/admin/settings', session);
+
+    // Any operator may reach this, whatever their role: it is their own credential.
+    expect(form.html).toContain('تغییر گذرواژه');
+
+    const wrong = await post('/admin/settings/password', form.cookies, {
+      _csrf: form.csrf,
+      currentPassword: 'not-the-password',
+      newPassword: SECONDARY_ROTATED,
+      confirmPassword: SECONDARY_ROTATED,
+    });
+    expect(wrong.status).toBe(303);
+    expect(wrong.headers.get('location')).toContain('err=password_wrong');
+
+    // A password the rules refuse says so, rather than silently doing nothing.
+    const weak = await post('/admin/settings/password', form.cookies, {
+      _csrf: form.csrf,
+      currentPassword: SECONDARY_PASSWORD,
+      newPassword: 'short1',
+      confirmPassword: 'short1',
+    });
+    expect(weak.headers.get('location')).toContain('err=password_invalid');
+
+    const mismatched = await post('/admin/settings/password', form.cookies, {
+      _csrf: form.csrf,
+      currentPassword: SECONDARY_PASSWORD,
+      newPassword: SECONDARY_ROTATED,
+      confirmPassword: `${SECONDARY_ROTATED}-typo`,
+    });
+    expect(mismatched.headers.get('location')).toContain('err=password_invalid');
+
+    // A second device signed in as the same operator. Changing a password has to sign it out:
+    // that is the whole point of the operation when someone else may have the password.
+    const otherDevice = await signInAdmin(SECONDARY_MOBILE, SECONDARY_PASSWORD);
+
+    const changed = await post('/admin/settings/password', form.cookies, {
+      _csrf: form.csrf,
+      currentPassword: SECONDARY_PASSWORD,
+      newPassword: SECONDARY_ROTATED,
+      confirmPassword: SECONDARY_ROTATED,
+    });
+    expect(changed.status).toBe(303);
+    expect(changed.headers.get('location')).toContain('ok=password_changed');
+
+    const stillIn = await SELF.fetch('https://steve-pay.test/admin/settings', {
+      headers: { cookie: mergeCookies(form.cookies, cookiesOf(changed)) },
+    });
+    expect(stillIn.status, 'the device that changed the password was signed out too').toBe(200);
+
+    const kicked = await SELF.fetch('https://steve-pay.test/admin/settings', {
+      headers: { cookie: otherDevice },
+      redirect: 'manual',
+    });
+    expect(kicked.status, 'the other session survived a password change').toBe(302);
+
+    // And the credential really changed: the old one no longer signs in, the new one does.
+    expect((await attemptAdminSignIn(SECONDARY_MOBILE, SECONDARY_PASSWORD)).status).not.toBe(303);
+    expect((await attemptAdminSignIn(SECONDARY_MOBILE, SECONDARY_ROTATED)).status).toBe(303);
+  });
+
+  it('stores the Telegram bot token encrypted, and never renders it back', async () => {
+    await ensureAdmin();
+    const session = await adminSession();
+    const form = await openForm('/admin/settings', session);
+    expect(form.html).toContain('ربات تلگرام');
+
+    // A token that is not shaped like one is refused before it is stored, so a typo cannot
+    // sit in the row looking configured.
+    const badToken = await post('/admin/settings/telegram', form.cookies, {
+      _csrf: form.csrf,
+      botToken: 'not-a-token',
+      adminChatId: '',
+      enabled: '',
+    });
+    expect(badToken.headers.get('location')).toContain('err=telegram_token_invalid');
+
+    const badChat = await post('/admin/settings/telegram', form.cookies, {
+      _csrf: form.csrf,
+      botToken: '',
+      adminChatId: 'not-a-chat-id',
+      enabled: '',
+    });
+    expect(badChat.headers.get('location')).toContain('err=telegram_chat_invalid');
+
+    // Switching the bot on without a token is refused with the message that says what to do.
+    const enabledWithoutToken = await post('/admin/settings/telegram', form.cookies, {
+      _csrf: form.csrf,
+      botToken: '',
+      adminChatId: '123456789',
+      enabled: 'true',
+    });
+    expect(enabledWithoutToken.headers.get('location')).toContain('err=telegram_token_missing');
+
+    const token = `123456789:AA${'F'.repeat(33)}`;
+    const saved = await post('/admin/settings/telegram', form.cookies, {
+      _csrf: form.csrf,
+      botToken: token,
+      adminChatId: '-1001234567890',
+      enabled: 'true',
+    });
+    expect(saved.status).toBe(303);
+    // Telegram cannot verify a token that does not exist, and the console says so instead of
+    // reporting a success it did not have.
+    expect(saved.headers.get('location')).toContain('telegram_saved_unreachable');
+
+    const row = await env.DB.prepare(
+      "SELECT value, is_secret FROM system_settings WHERE key = 'telegram.bot_token'",
+    ).first<{ value: string; is_secret: number }>();
+    expect(row?.is_secret, 'the token row must be marked secret').toBe(1);
+    expect(row?.value).not.toBe(token);
+    expect(row?.value).not.toContain('123456789:');
+
+    // Encrypted is only useful if it decrypts: the round trip is what the bot needs.
+    const secrets = resolveSecrets(env);
+    expect(await unseal(row!.value, secrets.sessionSecret, TELEGRAM_SEAL_PURPOSE)).toBe(token);
+
+    const chat = await env.DB.prepare(
+      "SELECT value FROM system_settings WHERE key = 'telegram.admin_chat_id'",
+    ).first<{ value: string }>();
+    expect(chat?.value).toBe('-1001234567890');
+
+    const audited = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE event = 'settings.telegram_updated'",
+    ).first<{ count: number }>();
+    expect(audited?.count ?? 0).toBeGreaterThan(0);
+
+    // Reading the page back shows that a token is stored without printing it anywhere.
+    const after = await openForm('/admin/settings', session);
+    expect(after.html).not.toContain(token);
+    expect(after.html).not.toContain('F'.repeat(33));
+    expect(after.html).toContain('ذخیره شده');
+
+    // The form is hidden from a role that may not use it — and the endpoint refuses them
+    // as well, because hiding a form has never been an access rule.
+    await ensureSupportAdmin();
+    const supportSession = await signInAdmin(SUPPORT_MOBILE, SUPPORT_PASSWORD);
+    const supportForm = await openForm('/admin/settings', supportSession);
+    expect(supportForm.html).not.toContain('توکن ربات');
+
+    const refused = await post('/admin/settings/telegram', supportForm.cookies, {
+      _csrf: supportForm.csrf,
+      botToken: '',
+      adminChatId: '',
+      enabled: 'false',
+    });
+    expect(refused.status).toBe(403);
   });
 });

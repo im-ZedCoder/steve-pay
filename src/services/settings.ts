@@ -85,7 +85,7 @@ export const SETTING_DEFAULTS = {
   'cards.max_per_merchant': 20,
   'maintenance.invoice_creation_disabled': false,
   'maintenance.message': 'سرویس در حال به‌روزرسانی است. چند دقیقه دیگر دوباره تلاش کنید.',
-  'platform.name': 'Steve Pay',
+  'platform.name': 'Steve Gate',
   'platform.iran_timezone': 'Asia/Tehran',
   'platform.registration_enabled': true,
   'platform.turnstile_required': false,
@@ -93,6 +93,13 @@ export const SETTING_DEFAULTS = {
   'callbacks.allow_custom_urls': true,
   'telegram.low_balance_message': 'موجودی کیف پول شما کم است.',
   'telegram.invoice_failed_message': 'ساخت فاکتور ناموفق بود.',
+  // Configured from the admin console (§ admins). The token is stored sealed — see
+  // `routes/admin.ts` — so the column holds ciphertext, not a credential. There is no
+  // setting for the webhook secret on purpose: nothing serves `/telegram/webhook`, and a
+  // value the platform cannot use is a value that will be wrong by the time it can.
+  'telegram.enabled': false,
+  'telegram.bot_token': '',
+  'telegram.admin_chat_id': '',
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -102,7 +109,13 @@ const ADMIN_ONLY_SETTINGS: ReadonlySet<string> = new Set([
   'cards.enforce_luhn',
   'callbacks.allow_custom_urls',
   'matching.require_card_match',
+  // Where the bot token lives. A merchant reading platform settings must not be handed the
+  // row that holds it, even sealed.
+  'telegram.bot_token',
 ]);
+
+/** What a secret setting reads as wherever it is listed. Never the value itself. */
+export const SECRET_PLACEHOLDER = '••••••';
 
 export function isAdminOnlySetting(key: string): boolean {
   return ADMIN_ONLY_SETTINGS.has(key);
@@ -183,13 +196,22 @@ export class SettingsService {
     return raw === 'MERCHANT' ? 'MERCHANT' : 'PLATFORM';
   }
 
-  /** Every setting, for the admin console. `is_secret` rows are masked. */
+  /**
+   * Every setting, for the admin console. `is_secret` rows are masked.
+   *
+   * Masked here rather than at each call site, because that is what the comment above this
+   * method has always claimed and what the query did not do: the row came back whole, so the
+   * one screen that lists every setting was also the one screen that could print a
+   * credential. The value is replaced, not omitted — a key that disappears from the list is
+   * indistinguishable from a key that was never set.
+   */
   async list(): Promise<SettingRow[]> {
-    return all<SettingRow>(
+    const rows = await all<SettingRow>(
       this.db,
       `SELECT key, value, type, category, label, description, is_secret, updated_at, updated_by
        FROM system_settings ORDER BY category, key`,
     );
+    return rows.map((row) => (row.is_secret === 1 ? { ...row, value: SECRET_PLACEHOLDER } : row));
   }
 
   async categories(): Promise<string[]> {
@@ -211,17 +233,25 @@ export class SettingsService {
     key: string,
     value: string,
     actorUserId: string | null,
+    options: { secret?: boolean } = {},
   ): Promise<{ before: string | null; after: string }> {
     const existing = await first<SettingRow>(this.db, 'SELECT * FROM system_settings WHERE key = ?', [key]);
     const type: SettingType = existing?.type ?? inferType(key);
 
     validateSettingValue(key, value, type);
 
+    // `is_secret` is sticky: a row that was written as a secret stays one, so a later write
+    // that forgets the flag cannot turn a stored credential into a readable setting.
+    const isSecret = options.secret === true || existing?.is_secret === 1;
+
     await run(
       this.db,
       `INSERT INTO system_settings (key, value, type, category, label, description, is_secret, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+         is_secret = CASE WHEN system_settings.is_secret = 1 THEN 1 ELSE excluded.is_secret END,
+         updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by`,
       [
         key,
         value,
@@ -229,6 +259,7 @@ export class SettingsService {
         existing?.category ?? categoryOf(key),
         existing?.label ?? null,
         existing?.description ?? null,
+        isSecret ? 1 : 0,
         nowIso(),
         actorUserId,
       ],

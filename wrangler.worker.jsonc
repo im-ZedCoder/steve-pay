@@ -1,5 +1,5 @@
 {
-  // Steve Pay — companion **Worker** for the three surfaces Cloudflare Pages cannot run.
+  // Steve Gate — companion **Worker** for the three surfaces Cloudflare Pages cannot run.
   //
   // Pages Functions support HTTP only. They have no `scheduled()` handler and cannot be a
   // queue consumer, and this platform depends on both:

@@ -1,7 +1,7 @@
 /**
  * The platform's own origin.
  *
- * Steve Pay is deployed under a hostname that does not exist when this code is
+ * Steve Gate is deployed under a hostname that does not exist when this code is
  * written: a Pages project, a custom domain, a preview alias. Nothing here is
  * configured and nothing is hard-coded, because a base URL in configuration is a
  * value that has to be correct in five places at once — the deploy config, three

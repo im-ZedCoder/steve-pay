@@ -107,9 +107,17 @@ describe('API rate limiting (§39)', () => {
     // persists D1 to .wrangler/state between runs and the test below deliberately raises
     // this setting. Reading "the default" here would make the test pass on a fresh machine
     // and fail on the second run — the worst kind of failure.
-    await services().settings.set('rate_limit.make_payment_per_minute', '60', null);
+    //
+    // The ceiling is far below the burst size on purpose. A fixed window is keyed on the
+    // wall clock, and these 70 requests take several seconds to drain, so the batch can
+    // straddle a minute boundary — that is exactly how this test used to fail about once
+    // in ten runs by spreading ~35 requests into each window, both under a ceiling of 60.
+    // With a ceiling of 8, though, zero refusals would need the batch to span nine
+    // windows, which is eight minutes rather than seconds: the assertion now holds whatever
+    // the clock says.
+    await services().settings.set('rate_limit.make_payment_per_minute', '8', null);
 
-    // 70 attempts against a ceiling of 60, so at least 10 must be refused.
+    // 70 attempts against a ceiling of 8, so the overwhelming majority must be refused.
     const responses = await Promise.all(
       Array.from({ length: 70 }, (_unused, index) =>
         SELF.fetch('https://steve-pay.test/api/v1/payments', {

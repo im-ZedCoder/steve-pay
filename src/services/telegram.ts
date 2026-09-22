@@ -21,7 +21,9 @@ import { nowIso, formatJalaliDateTime } from '../core/time';
 import { formatTomanFa, estimatedInvoiceCapacity, type Toman } from '../core/money';
 import { toPersianDigits } from '../core/digits';
 import { absoluteUrl } from '../core/origin';
+import { unseal } from '../core/crypto';
 import { NotificationService } from './notifications';
+import type { SettingsService } from './settings';
 import type { Logger } from '../obs/logger';
 
 export interface TelegramConfig {
@@ -29,6 +31,61 @@ export interface TelegramConfig {
   adminChatId: string | null;
   enabled: boolean;
   webhookSecret: string | null;
+}
+
+/**
+ * What the admin console has saved. `null` means "not configured here", which is what lets
+ * the environment keep working as the fallback it always was.
+ */
+export interface StoredTelegramConfig {
+  botToken: string | null;
+  adminChatId: string | null;
+  enabled: boolean | null;
+  webhookSecret: string | null;
+}
+
+/** Reads the stored configuration. Supplied by the service container. */
+export type TelegramConfigSource = () => Promise<StoredTelegramConfig>;
+
+/** Domain separation for the sealed credential. Rotating SESSION_SECRET re-seals nothing. */
+export const TELEGRAM_SEAL_PURPOSE = 'telegram-credential';
+
+/**
+ * Builds the reader for the console-configured bot.
+ *
+ * A stored **token** is what marks the configuration as console-managed: when there is one,
+ * everything else here is read from settings too, including `enabled`. Reading `enabled`
+ * unconditionally would be a bug rather than a feature — its default is `false`, so a
+ * deployment that configured Telegram entirely through environment variables would have its
+ * notifications switched off by a row nobody set.
+ *
+ * The two credentials are unsealed here and nowhere else, which is what lets the console
+ * store them without the ability to read them back.
+ */
+export function telegramConfigFromSettings(
+  settings: SettingsService,
+  sessionSecret: string,
+): TelegramConfigSource {
+  return async () => {
+    const [token, chatId, enabled] = await Promise.all([
+      settings.raw('telegram.bot_token'),
+      settings.raw('telegram.admin_chat_id'),
+      settings.raw('telegram.enabled'),
+    ]);
+
+    if (!token) return { botToken: null, adminChatId: null, enabled: null, webhookSecret: null };
+
+    return {
+      botToken: await unseal(token, sessionSecret, TELEGRAM_SEAL_PURPOSE),
+      adminChatId: chatId.length > 0 ? chatId : null,
+      // `enabled` is written as 'true'/'false' by the console; anything else is treated as
+      // "not set here" so a hand-edited row cannot silently disable the bot.
+      enabled: enabled === 'true' ? true : enabled === 'false' ? false : null,
+      // The webhook secret stays environment-only: nothing serves `/telegram/webhook`, so a
+      // stored one would be configuration for a route that does not exist.
+      webhookSecret: null,
+    };
+  };
 }
 
 export interface TelegramSendResult {
@@ -56,15 +113,80 @@ export class TelegramService {
   private readonly config: TelegramConfig;
   private readonly notifications: NotificationService;
   private readonly logger: Logger;
+  private readonly stored?: TelegramConfigSource;
+  private resolved: Promise<TelegramConfig> | null = null;
 
-  constructor(config: TelegramConfig, notifications: NotificationService, logger: Logger) {
+  constructor(
+    config: TelegramConfig,
+    notifications: NotificationService,
+    logger: Logger,
+    stored?: TelegramConfigSource,
+  ) {
     this.config = config;
     this.notifications = notifications;
     this.logger = logger;
+    this.stored = stored;
   }
 
-  get available(): boolean {
-    return this.config.enabled && this.config.botToken !== null;
+  /**
+   * The configuration actually in force.
+   *
+   * A value saved in the console wins over the environment variable of the same name, because
+   * the console is the place an operator can see and change it — and an override that a
+   * deploy silently reverts is worse than no override. The environment stays as the fallback
+   * it has always been, so a deployment configured the old way keeps working unchanged.
+   *
+   * Memoised per service instance, which is per request: an isolate is short-lived, so a
+   * change in the console takes effect on the next request rather than needing a redeploy.
+   *
+   * A settings read that fails falls back to the environment rather than throwing. A
+   * notification is a courtesy, and losing one because a database read was slow is a worse
+   * trade than sending it with yesterday's configuration.
+   */
+  private configNow(): Promise<TelegramConfig> {
+    if (!this.stored) return Promise.resolve(this.config);
+    this.resolved ??= this.stored()
+      .then((extra) => ({
+        botToken: extra.botToken ?? this.config.botToken,
+        adminChatId: extra.adminChatId ?? this.config.adminChatId,
+        enabled: extra.enabled ?? this.config.enabled,
+        webhookSecret: extra.webhookSecret ?? this.config.webhookSecret,
+      }))
+      .catch((error: unknown) => {
+        this.logger.warn('telegram.config_read_failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return this.config;
+      });
+    return this.resolved;
+  }
+
+  /** True when there is a token and notifications are switched on. */
+  async isAvailable(): Promise<boolean> {
+    const config = await this.configNow();
+    return config.enabled && config.botToken !== null;
+  }
+
+  /**
+   * Asks Telegram who a token belongs to, and saves nothing.
+   *
+   * Static and independent of the service on purpose: the console tests a token the operator
+   * has just typed, before it is stored, so a typo is caught by the person who made it
+   * instead of by a notification that never arrives.
+   */
+  static async verifyToken(token: string): Promise<{ ok: boolean; username?: string; title?: string; error?: string }> {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const body = (await response.json().catch(() => null)) as
+        | { ok?: boolean; result?: { username?: string; first_name?: string }; description?: string }
+        | null;
+      if (!response.ok || body?.ok !== true) {
+        return { ok: false, error: body?.description ?? `HTTP ${response.status}` };
+      }
+      return { ok: true, username: body.result?.username, title: body.result?.first_name };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /**
@@ -72,7 +194,8 @@ export class TelegramService {
    * a notification path where a failure must not surface to a merchant.
    */
   async send(chatId: string, text: string, options: { markdown?: boolean; buttonUrl?: string; buttonLabel?: string } = {}): Promise<TelegramSendResult> {
-    if (!this.available || !this.config.botToken) return { ok: false, skipped: true };
+    const config = await this.configNow();
+    if (!config.enabled || !config.botToken) return { ok: false, skipped: true };
 
     try {
       const body: Record<string, unknown> = {
@@ -90,7 +213,7 @@ export class TelegramService {
         };
       }
 
-      const response = await fetch(`https://api.telegram.org/bot${this.config.botToken}/sendMessage`, {
+      const response = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -111,20 +234,46 @@ export class TelegramService {
   }
 
   async sendToAdmin(text: string): Promise<TelegramSendResult> {
-    if (!this.config.adminChatId) return { ok: false, skipped: true };
-    return this.send(this.config.adminChatId, text);
+    const config = await this.configNow();
+    if (!config.adminChatId) return { ok: false, skipped: true };
+    return this.send(config.adminChatId, text);
+  }
+
+  /** The chat id the platform alerts to, or null. For a page that reports the configuration. */
+  async adminChatId(): Promise<string | null> {
+    return (await this.configNow()).adminChatId;
+  }
+
+  /**
+   * Is the bot configured, and what does Telegram say about it when asked?
+   *
+   * Reports what it finds rather than a boolean, because "configured but the token was
+   * revoked" is the state an operator most needs to see and the one a checkbox cannot show.
+   */
+  async status(): Promise<{ configured: boolean; enabled: boolean; reachable: boolean; username?: string; error?: string }> {
+    const config = await this.configNow();
+    if (!config.botToken) return { configured: false, enabled: false, reachable: false };
+    const probe = await TelegramService.verifyToken(config.botToken);
+    return {
+      configured: true,
+      enabled: config.enabled,
+      reachable: probe.ok,
+      username: probe.username,
+      error: probe.error,
+    };
   }
 
   /** Registers the webhook so /telegram/webhook receives updates. */
   async registerWebhook(origin: string): Promise<TelegramSendResult> {
-    if (!this.available || !this.config.botToken) return { ok: false, skipped: true };
+    const config = await this.configNow();
+    if (!config.enabled || !config.botToken) return { ok: false, skipped: true };
     try {
-      const response = await fetch(`https://api.telegram.org/bot${this.config.botToken}/setWebhook`, {
+      const response = await fetch(`https://api.telegram.org/bot${config.botToken}/setWebhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           url: absoluteUrl(origin, '/telegram/webhook'),
-          secret_token: this.config.webhookSecret ?? undefined,
+          secret_token: config.webhookSecret ?? undefined,
           allowed_updates: ['message', 'callback_query'],
           drop_pending_updates: false,
         }),

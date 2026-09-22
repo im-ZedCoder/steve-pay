@@ -106,6 +106,22 @@ export async function requireMerchant(c: RouteContext): Promise<ResolvedSession>
 }
 
 /**
+ * Requires a signed-in member of staff, with no particular permission.
+ *
+ * For the one thing every operator may do regardless of role: change their own password.
+ * `requirePermission` cannot express that — naming any permission here would lock out the
+ * roles that do not hold it from their own credential, which is exactly what happens if this
+ * is gated behind `settings:write`.
+ */
+export async function requireAdmin(c: RouteContext): Promise<ResolvedSession> {
+  const session = await requireSession(c);
+  if (!isAdminRole(session.user.role)) {
+    throw new AppError('FORBIDDEN', { message: 'این بخش مخصوص مدیران است.' });
+  }
+  return session;
+}
+
+/**
  * Requires an admin role holding `permission`.
  *
  * A `MERCHANT` has an empty permission set by design (see `ROLE_PERMISSIONS`), so a
@@ -248,6 +264,30 @@ const MESSAGES: Record<string, { tone: 'success' | 'error' | 'info' | 'warn'; te
   no_sms_evidence: { tone: 'error', text: 'پیامک متناظر با این پرداخت پیدا نشد، بنابراین تأیید ممکن نیست.' },
   not_reviewable: { tone: 'error', text: 'این فاکتور در وضعیت بررسی دستی نیست.' },
   permission_denied: { tone: 'error', text: 'نقش شما اجازه این کار را ندارد.' },
+
+  // --- admin console: system settings -------------------------------------
+  password_changed: { tone: 'success', text: 'گذرواژه عوض شد. نشست‌های دیگر بسته شدند.' },
+  password_wrong: { tone: 'error', text: 'گذرواژه فعلی نادرست است.' },
+  password_invalid: {
+    tone: 'error',
+    text: 'گذرواژه جدید پذیرفته نشد: حداقل ۱۰ کاراکتر، شامل حرف و رقم، و نه چیزی که حدس‌زدنی باشد.',
+  },
+  telegram_saved: { tone: 'success', text: 'تنظیمات ربات ذخیره شد.' },
+  telegram_saved_unreachable: {
+    tone: 'warn',
+    text: 'تنظیمات ذخیره شد، اما تلگرام توکن را نپذیرفت. توکن را بررسی کنید.',
+  },
+  telegram_token_invalid: { tone: 'error', text: 'قالب توکن ربات درست نیست.' },
+  telegram_chat_invalid: { tone: 'error', text: 'شناسه گفتگو باید عددی باشد (برای گروه‌ها با علامت منفی).' },
+  telegram_token_missing: {
+    tone: 'error',
+    text: 'برای فعال کردن ربات، اول توکن را وارد کنید.',
+  },
+  telegram_test_sent: { tone: 'success', text: 'یک پیام آزمایشی به گفتگوی مدیر فرستاده شد.' },
+  telegram_test_failed: {
+    tone: 'warn',
+    text: 'تنظیمات ذخیره شد، اما ارسال پیام آزمایشی ناموفق بود. شناسه گفتگو را بررسی کنید.',
+  },
 
   // --- merchant dashboard -------------------------------------------------
   card_created: { tone: 'success', text: 'کارت ثبت شد. اگر اولین کارت باشد، پیش‌فرض هم می‌شود.' },

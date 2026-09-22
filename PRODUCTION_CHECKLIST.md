@@ -156,7 +156,7 @@ Do this with a small real amount. It is the only step that proves the whole thin
 - [ ] Transfer the **exact** amount, including the suffix
 - [ ] The page flips to success without a manual refresh
 - [ ] The bank's message appears on the receipt, correctly redacted
-- [ ] The webhook arrived, the signature verified, `X-StevePay-Delivery` present
+- [ ] The webhook arrived, the signature verified, `X-SteveGate-Delivery` present
 - [ ] The Telegram notification arrived
 - [ ] The transaction appears in the admin console with a matching bank reference
 - [ ] The audit log contains every step

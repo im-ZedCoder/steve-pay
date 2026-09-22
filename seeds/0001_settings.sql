@@ -1,5 +1,5 @@
 -- =============================================================================
--- Steve Pay — seed data
+-- Steve Gate — seed data
 -- =============================================================================
 -- Platform settings only. No admin account is seeded on purpose: a default
 -- credentialed admin is the single most common way a production deployment gets
@@ -154,7 +154,7 @@ VALUES
    'Maintenance message', 'Shown to merchants whose API call is refused during maintenance.', 0,
    '2026-01-01T00:00:00.000Z'),
 
-  ('platform.name', 'Steve Pay', 'string', 'general', 'Platform name', 'Shown in the UI and in notifications.', 0,
+  ('platform.name', 'Steve Gate', 'string', 'general', 'Platform name', 'Shown in the UI and in notifications.', 0,
    '2026-01-01T00:00:00.000Z'),
 
   ('platform.iran_timezone', 'Asia/Tehran', 'string', 'general', 'Reporting timezone',
@@ -167,6 +167,25 @@ VALUES
   ('platform.turnstile_required', 'false', 'bool', 'security',
    'Require Turnstile on public forms',
    'Enable once TURNSTILE_SECRET is configured, otherwise public forms fail closed.', 0,
+   '2026-01-01T00:00:00.000Z'),
+
+  -- Telegram, configured from the admin console rather than from the environment, so the
+  -- operator who has the bot token does not need a deploy to use it. The token and the
+  -- webhook secret are stored sealed and are marked `is_secret`, which is what keeps them out
+  -- of every listing of settings.
+  ('telegram.enabled', 'false', 'bool', 'telegram',
+   'Send Telegram notifications',
+   'Off means every notification is skipped silently; the features that would send one keep working.',
+   0, '2026-01-01T00:00:00.000Z'),
+
+  ('telegram.bot_token', '', 'string', 'telegram',
+   'Bot token',
+   'From @BotFather, stored encrypted. Leave empty to keep the current token.', 1,
+   '2026-01-01T00:00:00.000Z'),
+
+  ('telegram.admin_chat_id', '', 'string', 'telegram',
+   'Admin chat id',
+   'Where platform alerts go. Send the bot a message and read the id from getUpdates.', 0,
    '2026-01-01T00:00:00.000Z')
 ON CONFLICT(key) DO NOTHING;
 

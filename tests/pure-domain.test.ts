@@ -36,6 +36,8 @@ import {
   normalizeSmsBody,
   digitsOnly,
 } from '../src/core/digits';
+import { webhookHeaders } from '../src/services/webhooks';
+import { PBKDF2_ITERATIONS } from '../src/core/crypto';
 import {
   luhnCheck,
   luhnCheckDigit,
@@ -443,5 +445,76 @@ describe('amount in words', () => {
     // Past the scale table the only honest answer is silence.
     expect(tomanInWords(10 ** 16)).toBe('');
     expect(tomanInWords(1.5)).toBe('');
+  });
+});
+
+/**
+ * The outbound delivery headers.
+ *
+ * Tested here rather than through an endpoint because the interesting property is not what a
+ * receiving server does with them: it is that the pair exists, matches, and is the whole of
+ * the contract. A delivery is hard to observe from inside the suite, and the failure this
+ * guards against is silent — a merchant's verification simply stops finding its header.
+ */
+/**
+ * The password work factor, pinned against the runtime's ceiling.
+ *
+ * This is a constant assertion rather than a behavioural test on purpose. The limit belongs
+ * to the Workers runtime on the network, and the runtime the test pool runs locally does not
+ * enforce it — which is exactly how 210,000 shipped: the suite signed in successfully on
+ * every run while no login could succeed in production. A test that could catch that has to
+ * encode the published ceiling itself.
+ */
+describe('password work factor', () => {
+  it('stays within the iteration count the Workers runtime supports', () => {
+    // Not a performance budget. Above this the runtime throws `NotSupportedError` from
+    // deriveBits before deriving anything, so verification cannot fail closed as "wrong
+    // password" — it throws, and every login for every account fails at once.
+    expect(PBKDF2_ITERATIONS).toBeLessThanOrEqual(100_000);
+
+    // And it should still be a real work factor, not a value that happens to pass.
+    expect(PBKDF2_ITERATIONS).toBeGreaterThanOrEqual(50_000);
+  });
+});
+
+describe('webhook delivery headers', () => {
+  const headers = webhookHeaders({
+    signature: 't=1758539464,v1=5f3c',
+    event: 'payment.success',
+    timestamp: '1758539464',
+    deliveryId: 'whd_01J8XM7K2P',
+    attempt: 3,
+  });
+
+  it('carries the current name and the one existing integrations may verify', () => {
+    const pairs = [
+      ['signature', 't=1758539464,v1=5f3c'],
+      ['event', 'payment.success'],
+      ['timestamp', '1758539464'],
+      ['delivery', 'whd_01J8XM7K2P'],
+      ['attempt', '3'],
+    ] as const;
+
+    for (const [name, value] of pairs) {
+      expect(headers[`x-stevegate-${name}`], `x-stevegate-${name}`).toBe(value);
+      // Not merely present: the same string, so verifying one verifies the other and nobody
+      // has to decide which of two signatures is authoritative.
+      expect(headers[`x-stevepay-${name}`], `x-stevepay-${name}`).toBe(value);
+    }
+  });
+
+  it('adds nothing beyond those two sets', () => {
+    expect(Object.keys(headers).sort()).toEqual([
+      'x-stevegate-attempt',
+      'x-stevegate-delivery',
+      'x-stevegate-event',
+      'x-stevegate-signature',
+      'x-stevegate-timestamp',
+      'x-stevepay-attempt',
+      'x-stevepay-delivery',
+      'x-stevepay-event',
+      'x-stevepay-signature',
+      'x-stevepay-timestamp',
+    ]);
   });
 });

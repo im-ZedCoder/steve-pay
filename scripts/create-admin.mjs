@@ -20,8 +20,8 @@
  *   npm run admin:create -- --mobile 0912... --role ADMIN
  *   npm run admin:create -- --remote
  *
- * For non-interactive use (CI, scripted bootstrap) pass STEVE_PAY_ADMIN_MOBILE and
- * STEVE_PAY_ADMIN_PASSWORD instead of being prompted. Passing a password on the command
+ * For non-interactive use (CI, scripted bootstrap) pass STEVE_GATE_ADMIN_MOBILE and
+ * STEVE_GATE_ADMIN_PASSWORD instead of being prompted. Passing a password on the command
  * line is possible but discouraged: it lands in the shell history and the process list.
  */
 
@@ -54,7 +54,15 @@ const ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUPPORT', 'FINANCE', 'VIEWER'];
 const DATABASE = 'steve-pay';
 
 function parseArgs(argv) {
-  const args = { remote: false, mobile: null, password: null, role: 'SUPER_ADMIN', name: null, yes: false };
+  const args = {
+    remote: false,
+    mobile: null,
+    password: null,
+    role: 'SUPER_ADMIN',
+    name: null,
+    yes: false,
+    allowShortPassword: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     switch (token) {
@@ -80,6 +88,9 @@ function parseArgs(argv) {
       case '--name':
         args.name = argv[++index] ?? null;
         break;
+      case '--allow-short-password':
+        args.allowShortPassword = true;
+        break;
       case '--help':
       case '-h':
         printUsage();
@@ -98,7 +109,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(`
-Create a Steve Pay admin account.
+Create a Steve Gate admin account.
 
   npm run admin:create [options]
 
@@ -108,12 +119,21 @@ Options:
   --role <ROLE>              ${ROLES.join(' | ')} (default SUPER_ADMIN)
   --name <text>              Display name
   --remote                   Target the remote database instead of local
+  --allow-short-password     Accept a password under ${MIN_PASSWORD_LENGTH} characters
   --yes, -y                  Skip the confirmation prompt
   -h, --help                 This message
 
+About --allow-short-password:
+  The console's own policy requires ${MIN_PASSWORD_LENGTH} characters, and the change-password
+  form enforces it, so a credential shorter than that can be installed here but cannot be
+  typed back into the console. The flag exists so an owner who insists on a specific
+  credential gets it through the same audited path as every other bootstrap, instead of by
+  pasting SQL into a shell where nothing records how the account was made. Composition rules
+  still apply: a letter and a digit are required either way.
+
 Environment variables (non-interactive):
-  STEVE_PAY_ADMIN_MOBILE
-  STEVE_PAY_ADMIN_PASSWORD
+  STEVE_GATE_ADMIN_MOBILE
+  STEVE_GATE_ADMIN_PASSWORD
 `);
 }
 
@@ -143,8 +163,16 @@ function isValidMobile(value) {
 
 const MIN_PASSWORD_LENGTH = 10;
 
-function passwordProblem(password) {
-  if (password.length < MIN_PASSWORD_LENGTH) return `must be at least ${MIN_PASSWORD_LENGTH} characters`;
+/**
+ * `allowShort` waives only the length rule, and only when `--allow-short-password` was
+ * passed. The composition rules stay: they are what the platform's own
+ * `validatePasswordStrength` requires of every account, and a bootstrap that could install
+ * `1234` would be a worse tool than one that refuses. See the flag's note in `--help`.
+ */
+function passwordProblem(password, { allowShort = false } = {}) {
+  if (!allowShort && password.length < MIN_PASSWORD_LENGTH) {
+    return `must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  }
   if (!/[a-z]/.test(password)) return 'must contain a lowercase letter';
   if (!/[A-Z]/.test(password)) return 'must contain an uppercase letter';
   if (!/\d/.test(password)) return 'must contain a digit';
@@ -191,21 +219,21 @@ async function main() {
     process.exit(1);
   }
 
-  let mobile = normalizeMobile(args.mobile ?? process.env.STEVE_PAY_ADMIN_MOBILE ?? '');
+  let mobile = normalizeMobile(args.mobile ?? process.env.STEVE_GATE_ADMIN_MOBILE ?? '');
   if (!mobile) mobile = normalizeMobile(await prompt('Admin mobile (09XXXXXXXXX): '));
   if (!isValidMobile(mobile)) {
     console.error(`Invalid mobile number "${mobile}". Expected 09 followed by 9 digits.`);
     process.exit(1);
   }
 
-  let password = args.password ?? process.env.STEVE_PAY_ADMIN_PASSWORD ?? '';
+  let password = args.password ?? process.env.STEVE_GATE_ADMIN_PASSWORD ?? '';
   if (!password) password = await promptHidden('Password: ');
-  const problem = passwordProblem(password);
+  const problem = passwordProblem(password, { allowShort: args.allowShortPassword });
   if (problem) {
     console.error(`Password ${problem}.`);
     process.exit(1);
   }
-  if (!args.password && !process.env.STEVE_PAY_ADMIN_PASSWORD) {
+  if (!args.password && !process.env.STEVE_GATE_ADMIN_PASSWORD) {
     const confirm = await promptHidden('Confirm password: ');
     if (confirm !== password) {
       console.error('Passwords do not match.');
@@ -222,6 +250,14 @@ async function main() {
   console.log(`  role     : ${role}`);
   console.log(`  name     : ${args.name ?? '(none)'}`);
   console.log('');
+
+  if (args.allowShortPassword && password.length < MIN_PASSWORD_LENGTH) {
+    console.warn(
+      `  ! Password is ${password.length} characters, under the ${MIN_PASSWORD_LENGTH}-character\n` +
+        '  ! policy. Sign-in will work. The console will not let this value be set again,\n' +
+        '  ! so changing it later means choosing a longer one.\n',
+    );
+  }
 
   if (!args.yes) {
     const answer = (await prompt('Create this admin? [y/N] ')).toLowerCase();
@@ -245,7 +281,7 @@ async function main() {
     process.exit(1);
   }
 
-  const sql = `-- Steve Pay admin bootstrap. Generated ${now}.
+  const sql = `-- Steve Gate admin bootstrap. Generated ${now}.
 INSERT INTO users (id, mobile, password_hash, role, status, display_name, must_change_password, created_at, updated_at)
 VALUES (
   '${userId}',

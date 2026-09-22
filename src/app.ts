@@ -222,7 +222,7 @@ export function createApp(appContext?: Partial<AppContext>): Hono<AppEnv> {
         c.get('appContext')?.requestId ?? 'unknown',
       );
     }
-    return html(serverErrorPage({ title: 'صفحه پیدا نشد', message: 'این آدرس روی Steve Pay وجود ندارد.', status: 404 }), {
+    return html(serverErrorPage({ title: 'صفحه پیدا نشد', message: 'این آدرس روی Steve Gate وجود ندارد.', status: 404 }), {
       status: 404,
       noStore: true,
     });

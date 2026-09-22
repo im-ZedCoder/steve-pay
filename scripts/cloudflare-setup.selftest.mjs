@@ -264,7 +264,7 @@ function createMockApi() {
  * environment, and no hostname appears in either file.
  */
 const FIXTURE_CONFIG = `{
-  // Steve Pay — Cloudflare Pages project configuration.
+  // Steve Gate — Cloudflare Pages project configuration.
   // A comment the patch must not disturb: ids are replaced as text, not by re-serialising.
   "name": "steve-pay",
   "pages_build_output_dir": "dist-pages",
@@ -293,7 +293,7 @@ const FIXTURE_CONFIG = `{
 
 /** The companion Worker: the same bindings, plus crons and the queue consumer. */
 const FIXTURE_WORKER_CONFIG = `{
-  // Steve Pay — companion Worker for cron and the webhook queue consumer.
+  // Steve Gate — companion Worker for cron and the webhook queue consumer.
   "name": "steve-pay-jobs",
   "main": "src/index.ts",
   "workers_dev": false,
@@ -522,12 +522,12 @@ async function main() {
     );
     check(
       'left the comments intact in the Pages config',
-      configAfter.includes('// Steve Pay — Cloudflare Pages project configuration.'),
+      configAfter.includes('// Steve Gate — Cloudflare Pages project configuration.'),
       're-serialising the config would have deleted every comment',
     );
     check(
       'left the comments intact in the companion config',
-      workerConfigAfter.includes('// Steve Pay — companion Worker for cron'),
+      workerConfigAfter.includes('// Steve Gate — companion Worker for cron'),
       're-serialising the config would have deleted every comment',
     );
     check(

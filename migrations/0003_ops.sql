@@ -1,5 +1,5 @@
 -- =============================================================================
--- Steve Pay — migration 0003: operations (webhooks, notifications, tickets,
+-- Steve Gate — migration 0003: operations (webhooks, notifications, tickets,
 -- telemetry, rate limiting, rollups)
 -- =============================================================================
 

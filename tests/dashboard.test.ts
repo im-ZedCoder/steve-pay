@@ -703,7 +703,7 @@ describe('merchant dashboard (§27, §32, §34, §35, §38)', () => {
 
     expect(response.status).toBe(200);
     const markup = await response.text();
-    expect(markup).toContain('STEVE_PAY_TEST');
+    expect(markup).toContain('STEVE_GATE_TEST');
     // The forwarder URL is shown so the merchant can copy it rather than guess the path.
     expect(markup).toContain('/sms');
   });

@@ -115,7 +115,7 @@ export function id(prefix: IdPrefix, now?: number): string {
   return `${prefix}_${ulid(now)}`;
 }
 
-/** Extracts the prefix from an id, or null when it is not a Steve Pay id. */
+/** Extracts the prefix from an id, or null when it is not a Steve Gate id. */
 export function prefixOf(value: string): string | null {
   const separator = value.indexOf('_');
   if (separator <= 0) return null;

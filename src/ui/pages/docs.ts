@@ -160,7 +160,7 @@ ${K('if')} (!hash_equals($expected, $received)) {
 }`;
 
 const NODE_FLOW = (origin: string) => `${K('const')} BASE = ${S(`'${origin}/api/v1'`)};
-${K('const')} key  = process.env.STEVE_PAY_KEY;
+${K('const')} key  = process.env.STEVE_GATE_KEY;
 
 ${K('async function')} ${P('createPayment')}(order) {
   ${K('const')} response = ${K('await')} fetch(BASE + ${S("'/payments'")}, {
@@ -657,12 +657,17 @@ ${table(
 ${table(
   ['هدر', 'محتوا'],
   [
-    [code('X-StevePay-Signature'), code('v1=<hex>') + ' — امضای HMAC-SHA256'],
-    [code('X-StevePay-Timestamp'), 'زمان ارسال به میلی‌ثانیه'],
-    [code('X-StevePay-Event'), 'نام رویداد'],
-    [code('X-StevePay-Delivery'), 'شناسه یکتای این تحویل؛ برای تشخیص دریافت تکراری'],
-    [code('X-StevePay-Attempt'), 'شماره تلاش، از ۱'],
+    [code('X-SteveGate-Signature'), code('v1=<hex>') + ' — امضای HMAC-SHA256'],
+    [code('X-SteveGate-Timestamp'), 'زمان ارسال به میلی‌ثانیه'],
+    [code('X-SteveGate-Event'), 'نام رویداد'],
+    [code('X-SteveGate-Delivery'), 'شناسه یکتای این تحویل؛ برای تشخیص دریافت تکراری'],
+    [code('X-SteveGate-Attempt'), 'شماره تلاش، از ۱'],
   ],
+)}
+${docsNote(
+  'سامانه پیش‌تر «Steve Pay» نام داشت. همان پنج هدر با نام قبلی (' +
+    code('X-StevePay-…') +
+    ') هم فرستاده می‌شود و مقدارش دقیقاً برابر نام تازه است، تا کدی که از قبل نوشته‌اید از کار نیفتد. خواندن هر کدام کافی است؛ امضای دومی برای بررسی وجود ندارد. برای کد تازه از نام بالا استفاده کنید.',
 )}
 
 <h3>بررسی امضا</h3>
@@ -678,7 +683,7 @@ ${docsNote(
 <div class="docs-note" style="direction:ltr;text-align:center;font-family:var(--mono);font-size:.78rem">
 1m → 5m → 30m → 2h → 12h → 24h
 </div>
-<p>هندلر شما باید <b>ایدمپوتنت</b> باشد: یک رویداد ممکن است بیش از یک بار برسد. با ${code('X-StevePay-Delivery')} دریافت‌های تکراری را تشخیص دهید و بی‌صدا ۲۰۰ برگردانید — برگرداندن خطا، تلاش دوباره را طولانی‌تر می‌کند.</p>
+<p>هندلر شما باید <b>ایدمپوتنت</b> باشد: یک رویداد ممکن است بیش از یک بار برسد. با ${code('X-SteveGate-Delivery')} دریافت‌های تکراری را تشخیص دهید و بی‌صدا ۲۰۰ برگردانید — برگرداندن خطا، تلاش دوباره را طولانی‌تر می‌کند.</p>
 ${docsNote(
   'سرور خود را طوری بنویسید که <b>پیش از</b> پاسخ‌دادن، پرداخت را تأیید شده ثبت کند. اگر کار اصلی را بعد از پاسخ انجام دهید و بعد از پاسخ شکست بخورد، ما ۲۰۰ دیده‌ایم و دیگر تلاش نمی‌کنیم.',
 )}
@@ -824,9 +829,9 @@ ${docsNote(
 
   return docsShell(
     {
-      title: 'مستندات API — Steve Pay',
+      title: 'مستندات API — Steve Gate',
       description:
-        'مستندات کامل درگاه پرداخت Steve Pay: ساخت پرداخت، پیامک بانک، وب‌هوک امضاشده، کدهای خطا و محدودیت‌ها.',
+        'مستندات کامل درگاه پرداخت Steve Gate: ساخت پرداخت، پیامک بانک، وب‌هوک امضاشده، کدهای خطا و محدودیت‌ها.',
       currentPath: '/docs',
       script: true,
       origin,

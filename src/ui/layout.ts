@@ -141,7 +141,7 @@ export function siteHeader(currentPath: string): string {
 
   return `<header class="site-nav">
   <nav class="site-nav-inner" aria-label="ناوبری اصلی">
-    <a class="site-brand" href="/"><span class="brand-tile" aria-hidden="true">S</span>Steve Pay</a>
+    <a class="site-brand" href="/"><span class="brand-tile" aria-hidden="true">S</span>Steve Gate</a>
     <div class="site-links">
       ${links}
       <a class="btn" href="/login">ورود</a>
@@ -174,7 +174,7 @@ export function siteFooter(origin?: string): string {
   <div class="site-foot-inner">
     <div>
       <a class="site-brand" href="/" style="margin-bottom:.5rem">
-        <span class="brand-tile" aria-hidden="true">S</span>Steve Pay
+        <span class="brand-tile" aria-hidden="true">S</span>Steve Gate
       </a>
       <div>درگاه پرداخت کارتی با تأیید خودکار از روی پیامک بانک.</div>
     </div>
@@ -319,7 +319,7 @@ export function dashboardShell(
   <div class="nav-top">
     <div class="nav-brand">
       <span class="brand-tile" aria-hidden="true">S</span>
-      <div><b>Steve Pay</b><span>پنل پذیرنده</span></div>
+      <div><b>Steve Gate</b><span>پنل پذیرنده</span></div>
     </div>
     ${navAccount({ place: 'bar', user: options.user, unreadCount: options.unreadCount })}
   </div>
@@ -359,7 +359,7 @@ export function adminShell(
   <div class="nav-top">
     <div class="nav-brand">
       <span class="brand-tile" aria-hidden="true">S</span>
-      <div><b>Steve Pay</b><span>کنسول مدیریت</span></div>
+      <div><b>Steve Gate</b><span>کنسول مدیریت</span></div>
     </div>
     ${navAccount({ place: 'bar', user: options.user, pendingReview: options.pendingReview })}
   </div>
@@ -711,7 +711,7 @@ export function serverErrorPage(input: {
   requestId?: string;
 }): string {
   return shell(
-    { title: `${input.title} — Steve Pay`, noindex: true, script: false },
+    { title: `${input.title} — Steve Gate`, noindex: true, script: false },
     `<div class="pay-wrap">
 <div class="pay-card state-${input.status === 404 ? 'review' : 'failed'}">
   <div class="pay-head">
@@ -734,7 +734,7 @@ export function serverErrorPage(input: {
 export function notFoundPage(): string {
   return serverErrorPage({
     title: 'صفحه پیدا نشد',
-    message: 'این آدرس روی Steve Pay وجود ندارد. اگر از یک لینک آمده‌اید، لینک را دوباره بررسی کنید.',
+    message: 'این آدرس روی Steve Gate وجود ندارد. اگر از یک لینک آمده‌اید، لینک را دوباره بررسی کنید.',
     status: 404,
   });
 }

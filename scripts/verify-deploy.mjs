@@ -110,7 +110,7 @@ Exits non-zero if any check fails, so a deploy step cannot pass on half a system
 const token = args.token ?? process.env.CLOUDFLARE_API_TOKEN ?? process.env.CF_API_TOKEN ?? null;
 const account = args.account ?? process.env.CLOUDFLARE_ACCOUNT_ID ?? null;
 const apiBase = (process.env.CLOUDFLARE_API_BASE ?? DEFAULT_API_BASE).replace(/\/+$/, '');
-const hostArg = args.host ?? process.env.STEVE_PAY_HOST ?? null;
+const hostArg = args.host ?? process.env.STEVE_GATE_HOST ?? null;
 
 const failures = [];
 const ok = (message) => console.log(`  \u2713 ${message}`);
@@ -315,7 +315,7 @@ if (hostArg) {
 } else {
   // Not a failure: the deployment deliberately has no configured hostname, so this script
   // has no way to know which address to ask.
-  console.log('  - /health not checked (pass --host or set STEVE_PAY_HOST)');
+  console.log('  - /health not checked (pass --host or set STEVE_GATE_HOST)');
 }
 
 // ---------------------------------------------------------------------------

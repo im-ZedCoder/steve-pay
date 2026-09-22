@@ -523,7 +523,7 @@ export class SmsService {
 
     // A realistic-looking bank message so the merchant can paste something that
     // exercises the real forwarder path.
-    const message = `STEVE_PAY_TEST ${token}\nمبلغ 1,000 تومان به حساب 6104****0000 واریز شد. شماره پیگیری 00000000`;
+    const message = `STEVE_GATE_TEST ${token}\nمبلغ 1,000 تومان به حساب 6104****0000 واریز شد. شماره پیگیری 00000000`;
 
     await this.audit.record({
       event: 'sms.test_verified',

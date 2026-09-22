@@ -1,10 +1,10 @@
-# Steve Pay
+# Steve Gate
 
 A card-transfer payment gateway for Iranian banks, running entirely on Cloudflare's edge.
 
-A merchant calls `makePayment`, Steve Pay allocates a **unique payable amount** and returns a
+A merchant calls `makePayment`, Steve Gate allocates a **unique payable amount** and returns a
 payment page. The customer transfers that exact amount to the merchant's bank card. The
-merchant's phone forwards the bank's confirmation SMS to `POST /sms`. Steve Pay parses it,
+merchant's phone forwards the bank's confirmation SMS to `POST /sms`. Steve Gate parses it,
 matches it to the invoice, confirms the payment, and calls the merchant back over a signed
 webhook.
 

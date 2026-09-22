@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * One-command Cloudflare provisioning for Steve Pay.
+ * One-command Cloudflare provisioning for Steve Gate.
  *
  * Give it a Cloudflare API token and it creates everything the deployment needs, writes the
  * real resource IDs back into `wrangler.jsonc`, applies the migrations, pushes the secrets,
@@ -182,7 +182,7 @@ function fail(message) {
 
 function printUsage() {
   console.log(`
-${bold('Provision Steve Pay on Cloudflare.')}
+${bold('Provision Steve Gate on Cloudflare.')}
 
   npm run cf:setup -- --token <CLOUDFLARE_API_TOKEN> [options]
 
@@ -212,7 +212,7 @@ ${bold('Secret sources')}
                    MAINTENANCE_MODE
 
 ${bold('Container-admin bootstrap')}
-  STEVE_PAY_ADMIN_MOBILE and STEVE_PAY_ADMIN_PASSWORD are passed through to
+  STEVE_GATE_ADMIN_MOBILE and STEVE_GATE_ADMIN_PASSWORD are passed through to
   scripts/create-admin.mjs. If they are absent, that phase prints the command to run.
 
 ${bold('Required token permissions')}
@@ -1205,8 +1205,8 @@ async function phaseDomain(state) {
 async function phaseAdmin(state) {
   phase('admin');
 
-  const mobile = process.env.STEVE_PAY_ADMIN_MOBILE;
-  const password = process.env.STEVE_PAY_ADMIN_PASSWORD;
+  const mobile = process.env.STEVE_GATE_ADMIN_MOBILE;
+  const password = process.env.STEVE_GATE_ADMIN_PASSWORD;
 
   if (!state.environments.includes('production')) {
     detail('Skipped: the production environment was not part of this run.');
@@ -1214,11 +1214,11 @@ async function phaseAdmin(state) {
   }
 
   if (!mobile || !password) {
-    warn('No admin created: STEVE_PAY_ADMIN_MOBILE and STEVE_PAY_ADMIN_PASSWORD are not set.');
+    warn('No admin created: STEVE_GATE_ADMIN_MOBILE and STEVE_GATE_ADMIN_PASSWORD are not set.');
     detail('There is no self-service admin signup by design — an endpoint that mints an');
     detail('ADMIN would be the highest-value target in the system. Run:');
     log('');
-    detail('  STEVE_PAY_ADMIN_MOBILE=09xxxxxxxxx STEVE_PAY_ADMIN_PASSWORD=... \\');
+    detail('  STEVE_GATE_ADMIN_MOBILE=09xxxxxxxxx STEVE_GATE_ADMIN_PASSWORD=... \\');
     detail('    npm run admin:create -- --remote');
     log('');
     return;
@@ -1232,7 +1232,7 @@ async function phaseAdmin(state) {
   const args = ['scripts/create-admin.mjs', '--remote', '--yes', '--name', 'Administrator'];
   try {
     runChild('node', args, {
-      env: { ...state.childEnv, STEVE_PAY_ADMIN_MOBILE: mobile, STEVE_PAY_ADMIN_PASSWORD: password },
+      env: { ...state.childEnv, STEVE_GATE_ADMIN_MOBILE: mobile, STEVE_GATE_ADMIN_PASSWORD: password },
     });
     log(`${green('Admin created.')} ${dim('Sign in at /login?scope=admin')}`);
   } catch (error) {
@@ -1316,7 +1316,7 @@ async function main() {
     ),
   };
 
-  console.log(`\n${bold('Steve Pay')} ${dim('· Cloudflare provisioning')}`);
+  console.log(`\n${bold('Steve Gate')} ${dim('· Cloudflare provisioning')}`);
   if (state.dryRun) console.log(yellow('dry run — nothing will be created or changed'));
 
   const runners = {

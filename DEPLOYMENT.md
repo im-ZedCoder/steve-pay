@@ -58,7 +58,7 @@ It creates the D1 database, the KV namespace, the queues and the Pages project; 
 IDs into `wrangler.jsonc` **and** `wrangler.worker.jsonc` without disturbing their comments;
 applies the migrations and seeds; generates and pushes the crypto secrets to both projects;
 builds and deploys the site, then the companion Worker; and creates the first admin if
-`STEVE_PAY_ADMIN_MOBILE` and `STEVE_PAY_ADMIN_PASSWORD` are set.
+`STEVE_GATE_ADMIN_MOBILE` and `STEVE_GATE_ADMIN_PASSWORD` are set.
 
 The phases run in this order, and the order is load-bearing:
 
@@ -218,7 +218,7 @@ npm run admin:create -- --remote  # production
 ```
 
 It prompts for a mobile number and a password, hashes it with PBKDF2, and writes a `SUPER_ADMIN`
-row. For scripted use, set `STEVE_PAY_ADMIN_MOBILE` and `STEVE_PAY_ADMIN_PASSWORD` instead of
+row. For scripted use, set `STEVE_GATE_ADMIN_MOBILE` and `STEVE_GATE_ADMIN_PASSWORD` instead of
 being prompted; that is what the setup script's `admin` phase does.
 
 Then:
@@ -305,7 +305,7 @@ Two repository secrets are required, and the token is the same one `npm run cf:s
 | `CLOUDFLARE_API_TOKEN` | Workers Scripts: Edit, Cloudflare Pages: Edit, Queues: Edit |
 | `CLOUDFLARE_ACCOUNT_ID` | the account id |
 
-An optional repository **variable** `STEVE_PAY_HOST` (the custom domain, once you have one)
+An optional repository **variable** `STEVE_GATE_HOST` (the custom domain, once you have one)
 makes the verification also check `<host>/health`. Nothing depends on it: the platform has no
 configured hostname, so the check is skipped when it is unset.
 

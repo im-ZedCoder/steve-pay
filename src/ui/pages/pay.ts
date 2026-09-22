@@ -35,7 +35,7 @@
  *
  *   The signature of the success page is the bank slip: the bank's *own* message, redacted,
  *   with the matched amount marked. This is not decoration, it is the product's entire claim
- *   made visible in one object — Steve Pay works by reading your bank's SMS, so here is the
+ *   made visible in one object — Steve Gate works by reading your bank's SMS, so here is the
  *   SMS it read. No other payment gateway can show this, and it is the most convincing
  *   possible answer to "did it actually arrive?".
  *
@@ -117,7 +117,7 @@ function brandMark(): string {
   return `<div class="pay-brandmark">
   <span class="brand-tile" aria-hidden="true">S</span>
   <div>
-    <b>Steve Pay</b>
+    <b>Steve Gate</b>
     <span>درگاه پرداخت کارت‌به‌کارت با تأیید خودکار</span>
   </div>
 </div>`;
@@ -364,7 +364,7 @@ function aside(input: PayPageInput, kind: InvoiceOpenability['kind']): string {
 <h2>پرداخت در سه گام</h2>
 <ol class="pay-guide">
   <li><b aria-hidden="true">۱</b><span>مبلغ را از همین صفحه کپی کنید و به کارت مقصد واریز کنید.</span></li>
-  <li><b aria-hidden="true">۲</b><span>پیامک واریز که بانک برایتان می‌فرستد، توسط Steve Pay خوانده می‌شود.</span></li>
+  <li><b aria-hidden="true">۲</b><span>پیامک واریز که بانک برایتان می‌فرستد، توسط Steve Gate خوانده می‌شود.</span></li>
   <li><b aria-hidden="true">۳</b><span>این صفحه خودکار تأیید می‌شود؛ نیازی به فرستادن رسید نیست.</span></li>
 </ol>
 </section>`
@@ -386,7 +386,7 @@ ${guide}
 <h2>نکته امنیتی</h2>
 <p class="pay-note-sm">
 شماره کارت و مبلغ را از همین صفحه کپی کنید تا جابه‌جا نشوند.
-<b>Steve Pay شماره کارت شما را ذخیره نمی‌کند</b>؛ برای تأیید، فقط پیامک واریز بانک خوانده می‌شود.
+<b>Steve Gate شماره کارت شما را ذخیره نمی‌کند</b>؛ برای تأیید، فقط پیامک واریز بانک خوانده می‌شود.
 ${support ? `<br>${support}` : ''}
 </p>
 </section>
@@ -448,7 +448,7 @@ function terminal(
   options: { stateLabel: string; heading: string; body: string; detail?: string },
 ): string {
   return page(input, tone, {
-    title: `${options.heading} — Steve Pay`,
+    title: `${options.heading} — Steve Gate`,
     stateLabel: options.stateLabel,
     live: false,
     body: `<p class="pay-desc">${escapeHtml(options.body)}</p>
@@ -473,7 +473,7 @@ export function payPage(input: PayPageInput): string {
     // -----------------------------------------------------------------------
     case 'PAYABLE':
       return page(input, 'pending', {
-        title: 'پرداخت فاکتور — Steve Pay',
+        title: 'پرداخت فاکتور — Steve Gate',
         stateLabel: 'در انتظار واریز',
         live: true,
         body: `${
@@ -497,14 +497,14 @@ ${testFlag(input)}`,
       const reference = input.transaction?.bank_reference ?? null;
       const slip = input.bankMessage
         ? `<div class="slip">
-  <div class="slip-head">پیامک بانک<span>خوانده‌شده توسط Steve Pay</span></div>
+  <div class="slip-head">پیامک بانک<span>خوانده‌شده توسط Steve Gate</span></div>
   <div class="slip-body">${escapeHtml(input.bankMessage)}</div>
   <div class="slip-foot">این همان پیامکی است که تأیید پرداخت را ممکن کرد. شماره کارت مبدأ برای حفاظت از حریم خصوصی پوشانده شده است.</div>
 </div>`
         : '';
 
       return page(input, 'success', {
-        title: 'پرداخت موفق — Steve Pay',
+        title: 'پرداخت موفق — Steve Gate',
         stateLabel: 'پرداخت تأیید شد',
         live: false,
         body: `<div class="pay-sec" style="text-align:center">

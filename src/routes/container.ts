@@ -36,7 +36,7 @@ import { AuthService } from '../services/auth';
 import { MerchantService } from '../services/merchants';
 import { WebhookService } from '../services/webhooks';
 import { NotificationService } from '../services/notifications';
-import { TelegramService } from '../services/telegram';
+import { TelegramService, telegramConfigFromSettings } from '../services/telegram';
 import { TurnstileService } from '../services/turnstile';
 import { RateLimiter, rateLimiterFor } from '../services/ratelimit';
 import { IdempotencyService } from '../services/idempotency';
@@ -109,6 +109,9 @@ export function servicesFor(context: ServiceContext): Services {
     },
     notifications,
     logger,
+    // What the admin console saved, when it saved anything. Read lazily so a change made in
+    // the console takes effect on the next request instead of needing a redeploy.
+    telegramConfigFromSettings(settings, secrets.sessionSecret),
   );
 
   const cards = new CardService(db, audit, settings);

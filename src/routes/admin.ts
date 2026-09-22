@@ -28,15 +28,17 @@
 import type { Hono } from 'hono';
 import type { AppEnv, RouteContext } from '../app';
 import { escapeHtml, html, redirect } from '../core/http';
-import { toPersianDigits } from '../core/digits';
+import { toEnglishDigits, toPersianDigits } from '../core/digits';
 import { formatJalaliDate, formatJalaliDateTime, formatRelativeFa } from '../core/time';
 import { formatTomanFa, parseTomanInput } from '../core/money';
 import { INVOICE_STATUSES, type InvoiceStatus } from '../core/state-machine';
 import { hasPermission, type Permission, type Role } from '../core/roles';
-import { AppError } from '../core/errors';
+import { AppError, isAppError } from '../core/errors';
 import { CSRF_FIELD } from '../core/csrf';
+import { resolveSecrets } from '../env';
 import {
   requirePermission,
+  requireAdmin,
   readForm,
   csrfForGet,
   withCsrfCookie,
@@ -44,6 +46,8 @@ import {
   signedOutRedirect,
   type ResolvedSession,
 } from './session';
+import { seal } from '../core/crypto';
+import { TelegramService, TELEGRAM_SEAL_PURPOSE } from '../services/telegram';
 import { adminShell, alert, badge, emptyState, ident, panel, sparkline, stat } from '../ui/layout';
 import { ReportingService } from '../services/reporting';
 import { confirmPayment } from '../services/confirm';
@@ -84,7 +88,13 @@ function adminNav(pendingReview: number): Array<{ group: string; links: Array<{ 
         { href: '/admin/invoices', label: 'فاکتورها' },
       ],
     },
-    { group: 'سیستم', links: [{ href: '/admin/audit-logs', label: 'گزارش رویدادها' }] },
+    {
+      group: 'سیستم',
+      links: [
+        { href: '/admin/settings', label: 'تنظیمات سامانه' },
+        { href: '/admin/audit-logs', label: 'گزارش رویدادها' },
+      ],
+    },
   ];
 }
 
@@ -94,7 +104,12 @@ interface PageInput {
   subheading?: string;
   path: string;
   actions?: string;
-  permission: Parameters<typeof requirePermission>[1];
+  /**
+   * Omitted for the one page every operator may open — system settings, where they change
+   * their own password. Any permission named here would exclude the roles that do not hold
+   * it, and "I cannot change my own password" is not a defensible access rule.
+   */
+  permission?: Permission;
 }
 
 /**
@@ -118,7 +133,7 @@ async function renderAdmin(
   // disagree about it again.
   let session: ResolvedSession;
   try {
-    session = await requirePermission(c, input.permission);
+    session = input.permission ? await requirePermission(c, input.permission) : await requireAdmin(c);
   } catch (error) {
     const signedOut = signedOutRedirect(c, error, 'admin');
     if (signedOut) return signedOut;
@@ -1099,6 +1114,220 @@ ${row('محیط', key.view.environment)}
   });
 
   // --- Audit log (§36) ----------------------------------------------------
+
+  // --- System settings: the operator's own credential, and the bot (§ admins) ---------
+
+  app.get('/admin/settings', (c) =>
+    renderAdmin(
+      c,
+      {
+        title: 'تنظیمات سامانه',
+        heading: 'تنظیمات سامانه',
+        subheading: 'گذرواژه شما و ربات اطلاع‌رسانی',
+        path: '/admin/settings',
+        // No permission: this page is where any operator changes their own password.
+      },
+      async (csrf) => {
+        const session = await requireAdmin(c);
+        const settings = session.services.settings;
+
+        const [storedToken, chatId, enabled, status] = await Promise.all([
+          settings.raw('telegram.bot_token'),
+          settings.raw('telegram.admin_chat_id'),
+          settings.bool('telegram.enabled'),
+          session.services.telegram.status(),
+        ]);
+
+        const passwordPanel = panel(
+          'تغییر گذرواژه',
+          `<form method="post" action="/admin/settings/password" class="stack" style="gap:.7rem;max-width:26rem">
+${csrf}
+<div class="field">
+  <label for="pw-current">گذرواژه فعلی</label>
+  <input class="input" id="pw-current" type="password" name="currentPassword" autocomplete="current-password" required>
+</div>
+<div class="field">
+  <label for="pw-new">گذرواژه جدید</label>
+  <input class="input" id="pw-new" type="password" name="newPassword" autocomplete="new-password" required minlength="10">
+  <p class="hint">حداقل ۱۰ کاراکتر، شامل حرف و رقم.</p>
+</div>
+<div class="field">
+  <label for="pw-confirm">تکرار گذرواژه جدید</label>
+  <input class="input" id="pw-confirm" type="password" name="confirmPassword" autocomplete="new-password" required minlength="10">
+</div>
+<button class="btn btn-primary" type="submit">ذخیره گذرواژه</button>
+<p class="hint">با تغییر گذرواژه، نشست‌های دیگر این حساب بسته می‌شوند و همین دستگاه باز می‌ماند.</p>
+</form>`,
+        );
+
+        // Rendered only for a role that may change it. Hiding the form is not the check —
+        // the POST handler asks for the permission itself — but showing a form that will
+        // refuse is a worse way to say no.
+        const canManageBot = hasPermission(session.user.role, 'telegram:manage');
+
+        const statusText = !status.configured
+          ? 'تنظیم نشده'
+          : !status.reachable
+            ? `توکن ذخیره شده، اما تلگرام پاسخ نداد${status.error ? ` (${status.error})` : ''}`
+            : enabled
+              ? `فعال — @${status.username ?? '?'}`
+              : `خاموش — @${status.username ?? '?'} (توکن معتبر است)`;
+
+        const statusRows = [
+          row('وضعیت', statusText, status.configured && status.reachable && enabled ? 'settle' : 'amber'),
+          row('توکن', storedToken.length > 0 ? 'ذخیره شده (رمزنگاری‌شده)' : 'خالی'),
+          row('گفتگوی مدیر', chatId.length > 0 ? toPersianDigits(chatId) : 'خالی'),
+        ].join('');
+
+        const botPanel = canManageBot
+          ? panel(
+              'ربات تلگرام',
+              `<div style="margin-bottom:.9rem">${statusRows}</div>
+<form method="post" action="/admin/settings/telegram" class="stack" style="gap:.7rem;max-width:26rem">
+${csrf}
+<div class="field">
+  <label for="bot-token">توکن ربات</label>
+  <input class="input" id="bot-token" type="password" name="botToken" autocomplete="off" spellcheck="false" placeholder="123456789:AA…">
+  <p class="hint">${storedToken.length > 0 ? 'توکن ذخیره شده است. برای تغییر، توکن تازه را وارد کنید؛ خالی گذاشتن یعنی دست نزن.' : 'توکن را از @BotFather بگیرید.'}</p>
+</div>
+<div class="field">
+  <label for="bot-chat">شناسه گفتگوی مدیر</label>
+  <input class="input num" id="bot-chat" name="adminChatId" inputmode="numeric" value="${escapeHtml(chatId)}" placeholder="-1001234567890">
+  <p class="hint">گزارش‌های سامانه به این گفتگو می‌رود. برای گروه، با علامت منفی.</p>
+</div>
+<div class="field">
+  <label for="bot-enabled" style="display:flex;align-items:center;gap:.5rem">
+    <input id="bot-enabled" type="checkbox" name="enabled" value="true"${enabled ? ' checked' : ''}>
+    <span>ارسال اطلاعیه‌ها فعال باشد</span>
+  </label>
+  <p class="hint">خاموش بودن یعنی هیچ پیامی فرستاده نمی‌شود؛ بقیه سامانه بدون تغییر کار می‌کند.</p>
+</div>
+<button class="btn btn-primary" type="submit">ذخیره تنظیمات ربات</button>
+<p class="hint">با ذخیره، توکن با تلگرام بررسی می‌شود و یک پیام آزمایشی به گفتگوی مدیر می‌رود.</p>
+</form>`,
+            )
+          : '';
+
+        return `${passwordPanel}${botPanel}`;
+      },
+    ),
+  );
+
+  app.post('/admin/settings/password', async (c) => {
+    const session = await requireAdmin(c);
+    const form = await readForm(c);
+    const context = c.get('appContext');
+
+    try {
+      await session.services.auth.changePassword(
+        session.user.id,
+        {
+          currentPassword: form.value('currentPassword'),
+          newPassword: form.value('newPassword'),
+          confirmPassword: form.value('confirmPassword'),
+        },
+        {
+          ip: context.clientIp,
+          userAgent: c.req.header('user-agent') ?? null,
+          requestId: context.requestId,
+        },
+        // Keeps the operator signed in on the device they are using. The audit entry
+        // `auth.password_changed` is written by the service, so this cannot happen
+        // unrecorded.
+        session.sessionId,
+      );
+    } catch (error) {
+      if (isAppError(error) && error.code === 'INVALID_CREDENTIALS') {
+        return redirect('/admin/settings?err=password_wrong');
+      }
+      if (isAppError(error) && error.code === 'VALIDATION_FAILED') {
+        return redirect('/admin/settings?err=password_invalid');
+      }
+      throw error;
+    }
+
+    return redirect('/admin/settings?ok=password_changed');
+  });
+
+  app.post('/admin/settings/telegram', async (c) => {
+    const session = await requirePermission(c, 'telegram:manage');
+    const form = await readForm(c);
+    const context = c.get('appContext');
+    const settings = session.services.settings;
+    const credentials = actor(c, session);
+    const back = '/admin/settings';
+
+    const submittedToken = form.value('botToken').trim();
+    // Persian and Arabic-Indic digits are what a numeric field receives on a phone with a
+    // Persian keyboard, and `-100…` pasted from Telegram is the shape a group id has.
+    const chatId = toEnglishDigits(form.value('adminChatId')).trim();
+    const enabled = form.value('enabled') === 'true';
+
+    if (chatId.length > 0 && !/^-?\d{4,32}$/.test(chatId)) {
+      return redirect(`${back}?err=telegram_chat_invalid`);
+    }
+
+    const stored = await settings.raw('telegram.bot_token');
+
+    // A token that does not look like one is refused before it is stored: a bare typo would
+    // otherwise sit in the row looking configured.
+    if (submittedToken.length > 0 && !/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(submittedToken)) {
+      return redirect(`${back}?err=telegram_token_invalid`);
+    }
+
+    if (enabled && stored.length === 0 && submittedToken.length === 0) {
+      return redirect(`${back}?err=telegram_token_missing`);
+    }
+
+    // Asked before it is trusted. A token Telegram rejects is still saved — the operator may
+    // be behind a network that cannot reach api.telegram.org — but the answer is reported
+    // rather than assumed, which is the difference between a warning and a silent failure.
+    let reachable = true;
+    if (submittedToken.length > 0) {
+      const probe = await TelegramService.verifyToken(submittedToken);
+      reachable = probe.ok;
+
+      const secrets = resolveSecrets(context.env);
+      await settings.set(
+        'telegram.bot_token',
+        await seal(submittedToken, secrets.sessionSecret, TELEGRAM_SEAL_PURPOSE),
+        credentials.userId,
+        { secret: true },
+      );
+    }
+
+    await settings.set('telegram.admin_chat_id', chatId, credentials.userId);
+    await settings.set('telegram.enabled', enabled ? 'true' : 'false', credentials.userId);
+
+    await session.services.audit.record({
+      event: 'settings.telegram_updated',
+      severity: 'WARNING',
+      actor: credentials,
+      targetType: 'setting',
+      targetId: 'telegram',
+      // The token is never in here. Its presence is, which is what an audit reader needs.
+      metadata: {
+        tokenReplaced: submittedToken.length > 0,
+        tokenReachable: reachable,
+        chatId,
+        enabled,
+      },
+      requestId: context.requestId,
+    });
+
+    if (!reachable) return redirect(`${back}?err=telegram_saved_unreachable`);
+
+    // A test message is the only proof that the chat id is right, and the wrong chat id is
+    // the failure that looks like success everywhere else in the console.
+    if (enabled && chatId.length > 0) {
+      const sent = await session.services.telegram.sendToAdmin(
+        '<b>Steve Gate</b>\nاین پیام آزمایشی از پنل مدیریت است. از این پس اطلاعیه‌ها به این گفتگو می‌رسد.',
+      );
+      return redirect(`${back}?${sent.ok ? 'ok=telegram_test_sent' : 'err=telegram_test_failed'}`);
+    }
+
+    return redirect(`${back}?ok=telegram_saved`);
+  });
 
   app.get('/admin/audit-logs', (c) =>
     renderAdmin(

@@ -1,5 +1,5 @@
 {
-  // Steve Pay — Cloudflare **Pages** project configuration.
+  // Steve Gate — Cloudflare **Pages** project configuration.
   //
   // This file describes the web application. The three background surfaces that Pages
   // Functions cannot run — the cron sweeper and the webhook queue consumer — live in

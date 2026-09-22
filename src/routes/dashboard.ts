@@ -277,7 +277,7 @@ async function overviewPage(c: RouteContext): Promise<Response> {
   return render(
     c,
     {
-      title: 'نمای کلی — Steve Pay',
+      title: 'نمای کلی — Steve Gate',
       heading: 'نمای کلی',
       subheading: 'امروز چه اتفاقی افتاده و کجای راه‌اندازی مانده است',
       path: '/dashboard',
@@ -466,7 +466,7 @@ async function paymentsPage(c: RouteContext): Promise<Response> {
   return render(
     c,
     {
-      title: 'پرداخت‌ها — Steve Pay',
+      title: 'پرداخت‌ها — Steve Gate',
       heading: 'پرداخت‌ها',
       subheading: 'هر فاکتوری که ساخته‌اید و سرنوشت مبلغ یکتای آن',
       path: '/dashboard/payments',
@@ -567,7 +567,7 @@ async function paymentDetailPage(c: RouteContext): Promise<Response> {
   return render(
     c,
     {
-      title: 'جزئیات پرداخت — Steve Pay',
+      title: 'جزئیات پرداخت — Steve Gate',
       heading: 'جزئیات پرداخت',
       subheading: invoiceId,
       path: '/dashboard/payments',
@@ -768,7 +768,7 @@ async function walletPage(c: RouteContext): Promise<Response> {
   return render(
     c,
     {
-      title: 'کیف پول — Steve Pay',
+      title: 'کیف پول — Steve Gate',
       heading: 'کیف پول',
       subheading: 'کارمزد درگاه از این موجودی کسر می‌شود',
       path: '/dashboard/wallet',
@@ -854,7 +854,7 @@ async function cardsPage(c: RouteContext, notice?: PageInput['notice']): Promise
   return render(
     c,
     {
-      title: 'کارت‌های مقصد — Steve Pay',
+      title: 'کارت‌های مقصد — Steve Gate',
       heading: 'کارت‌های مقصد',
       subheading: 'پول مشتری به این کارت‌ها واریز می‌شود',
       path: '/dashboard/cards',
@@ -996,7 +996,7 @@ async function apiKeysPage(
   return render(
     c,
     {
-      title: 'کلیدهای API — Steve Pay',
+      title: 'کلیدهای API — Steve Gate',
       heading: 'کلیدهای API',
       subheading: 'کلیدی که سرور شما با آن فاکتور می‌سازد و پیامک می‌فرستد',
       path: '/dashboard/api-keys',
@@ -1148,7 +1148,7 @@ async function webhooksPage(
   return render(
     c,
     {
-      title: 'وب‌هوک — Steve Pay',
+      title: 'وب‌هوک — Steve Gate',
       heading: 'وب‌هوک',
       subheading: 'رویدادهای پرداخت با امضای HMAC به سرور شما می‌روند',
       path: '/dashboard/webhooks',
@@ -1174,7 +1174,7 @@ async function webhooksPage(
   <button class="btn" type="button" data-copy="${escapeHtml(reveal.secret)}">کپی</button>
 </div>
 <p style="margin:.9rem 0 0;font-size:.76rem;color:var(--steel);line-height:1.95">
-با همین راز، هدر <span class="mono">X-StevePay-Signature</span> را بررسی کنید. نمونه کد در
+با همین راز، هدر <span class="mono">X-SteveGate-Signature</span> را بررسی کنید. نمونه کد در
 <a href="/docs#webhooks">مستندات</a> هست.
 </p>
 </div>`
@@ -1285,7 +1285,7 @@ ${panel(
 </p>
 <p style="margin:.9rem 0 0;font-size:.82rem;line-height:2.1;color:var(--steel)">
 هندلر شما باید تحویل تکراری را تحمل کند: یک رویداد ممکن است بیش از یک‌بار برسد.
-با <span class="mono" style="font-size:.72rem">X-StevePay-Delivery</span> تشخیصش دهید و بی‌صدا ۲۰۰ بدهید.
+با <span class="mono" style="font-size:.72rem">X-SteveGate-Delivery</span> تشخیصش دهید و بی‌صدا ۲۰۰ بدهید.
 </p>`,
 )}
 </div>
@@ -1358,7 +1358,7 @@ async function smsPage(
   return render(
     c,
     {
-      title: 'پیامک بانک — Steve Pay',
+      title: 'پیامک بانک — Steve Gate',
       heading: 'پیامک بانک',
       subheading: 'تنها مسیری که یک پرداخت را تأیید می‌کند',
       path: '/dashboard/sms',
@@ -1531,7 +1531,7 @@ async function settingsPage(c: RouteContext, notice?: PageInput['notice']): Prom
   return render(
     c,
     {
-      title: 'تنظیمات پرداخت — Steve Pay',
+      title: 'تنظیمات پرداخت — Steve Gate',
       heading: 'تنظیمات پرداخت',
       subheading: 'پیش‌فرض‌هایی که روی فاکتورهای تازه اعمال می‌شوند',
       path: '/dashboard/settings',
@@ -1633,7 +1633,7 @@ async function notificationsPage(c: RouteContext): Promise<Response> {
   return render(
     c,
     {
-      title: 'اطلاعیه‌ها — Steve Pay',
+      title: 'اطلاعیه‌ها — Steve Gate',
       heading: 'اطلاعیه‌ها',
       subheading: 'رویدادهایی که سامانه به شما خبر می‌دهد',
       path: '/dashboard/notifications',
@@ -1700,7 +1700,7 @@ async function profilePage(c: RouteContext, notice?: PageInput['notice']): Promi
   return render(
     c,
     {
-      title: 'پروفایل فروشگاه — Steve Pay',
+      title: 'پروفایل فروشگاه — Steve Gate',
       heading: 'پروفایل فروشگاه',
       subheading: 'نام و اطلاعاتی که روی صفحه پرداخت دیده می‌شود',
       path: '/dashboard/profile',

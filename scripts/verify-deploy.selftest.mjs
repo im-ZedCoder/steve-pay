@@ -190,7 +190,7 @@ function run(extraEnv = {}) {
         CLOUDFLARE_API_BASE: apiBase,
         CLOUDFLARE_API_TOKEN: TOKEN,
         CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
-        STEVE_PAY_HOST: '',
+        STEVE_GATE_HOST: '',
         ...extraEnv,
       },
     });

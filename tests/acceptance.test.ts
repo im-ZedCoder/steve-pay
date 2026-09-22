@@ -122,7 +122,7 @@ function csrfFrom(html: string): string {
 // The flow
 // ---------------------------------------------------------------------------
 
-describe('Steve Pay end-to-end flow (§78)', () => {
+describe('Steve Gate end-to-end flow (§78)', () => {
   it('registers a merchant, gets approved, and settles a payment from a bank SMS', async () => {
     await ensureAdmin();
     const setup = services();

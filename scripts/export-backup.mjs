@@ -92,7 +92,7 @@ function parseArgs(argv) {
       case '--help':
       case '-h':
         console.log(`
-Export Steve Pay money tables to JSON, excluding every credential column.
+Export Steve Gate money tables to JSON, excluding every credential column.
 
   npm run backup:export [options]
 
@@ -234,7 +234,7 @@ function main() {
   }, new Map());
 
   const lines = [
-    `Steve Pay backup report`,
+    `Steve Gate backup report`,
     `exported at : ${payload.exportedAt}`,
     `database    : ${database}`,
     `rows        : ${Object.entries(rowCounts).map(([table, count]) => `${table}=${count}`).join(' ')}`,

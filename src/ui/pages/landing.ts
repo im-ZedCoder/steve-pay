@@ -85,9 +85,9 @@ const RESPONSE = (origin: string) => `{
 
 const WEBHOOK = `${C('// سرور شما، هنگام تأیید پرداخت')}
 POST /pay/callback
-${P('X-StevePay-Signature')}: ${S('t=1758534120,v1=8f2c…')}
-${P('X-StevePay-Event')}: ${S('payment.success')}
-${P('X-StevePay-Delivery')}: ${S('whd_01J8XK9Q7A')}
+${P('X-SteveGate-Signature')}: ${S('t=1758534120,v1=8f2c…')}
+${P('X-SteveGate-Event')}: ${S('payment.success')}
+${P('X-SteveGate-Delivery')}: ${S('whd_01J8XK9Q7A')}
 
 {
   ${P('"event"')}: ${P('"payment.success"')},
@@ -267,7 +267,7 @@ ${factGrid([
 
   return publicShell(
     {
-      title: 'Steve Pay — درگاه پرداخت با تأیید خودکار از پیامک بانک',
+      title: 'Steve Gate — درگاه پرداخت با تأیید خودکار از پیامک بانک',
       description:
         'درگاه پرداخت کارتی با مبلغ یکتا، تطبیق خودکار پیامک بانک، کیف پول و دفتر کل، و وبهوک امضاشده با HMAC.',
       currentPath: '/',

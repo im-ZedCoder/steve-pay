@@ -1,6 +1,6 @@
 # Webhooks
 
-When a payment is confirmed, Steve Pay calls the merchant. The callback is signed, delivered
+When a payment is confirmed, Steve Gate calls the merchant. The callback is signed, delivered
 asynchronously, retried on failure, and logged in full.
 
 ---
@@ -48,15 +48,30 @@ merchant's default endpoint.
 ## Headers
 
 ```http
-X-StevePay-Signature: t=1758539464,v1=5f3c...e91
-X-StevePay-Event: payment.success
-X-StevePay-Timestamp: 1758539464
-X-StevePay-Delivery: whd_01J8XM7K2P...
+X-SteveGate-Signature: t=1758539464,v1=5f3c...e91
+X-SteveGate-Event: payment.success
+X-SteveGate-Timestamp: 1758539464
+X-SteveGate-Delivery: whd_01J8XM7K2P...
 Content-Type: application/json
 ```
 
-`X-StevePay-Delivery` is stable across retries of the same delivery, so it is the right key for the
-merchant's own dedupe. `X-StevePay-Timestamp` is Unix seconds.
+`X-SteveGate-Delivery` is stable across retries of the same delivery, so it is the right key for the
+merchant's own dedupe. `X-SteveGate-Timestamp` is Unix seconds.
+
+### The previous names still arrive
+
+The platform was called Steve Pay until the rename, and these header names are the one part of that
+rename an integration has code written against. Every delivery therefore carries **both sets**:
+
+```http
+X-SteveGate-Signature: t=1758539464,v1=5f3c...e91
+X-StevePay-Signature:  t=1758539464,v1=5f3c...e91
+```
+
+The values are identical — this is a duplicate, not a second scheme, so reading either header is
+enough and there is nothing extra to verify. New code should read `X-SteveGate-*`; code already in
+testing does not have to change. The legacy set will be dropped in a later release, and it will be
+announced here rather than removed quietly.
 
 ---
 
@@ -77,7 +92,7 @@ const crypto = require('crypto');
 
 // express.raw() — NOT express.json(): the signature covers the exact bytes.
 app.post('/payment/callback', express.raw({ type: 'application/json' }), (req, res) => {
-  const header = req.get('X-StevePay-Signature') || '';
+  const header = req.get('X-SteveGate-Signature') || '';
   const parts = Object.fromEntries(header.split(',').map((p) => p.split('=')));
   const timestamp = parts.t;
   const provided = parts.v1;
@@ -90,7 +105,7 @@ app.post('/payment/callback', express.raw({ type: 'application/json' }), (req, r
   }
 
   const expected = crypto
-    .createHmac('sha256', process.env.STEVE_PAY_WEBHOOK_SECRET)
+    .createHmac('sha256', process.env.STEVE_GATE_WEBHOOK_SECRET)
     .update(`${timestamp}.${req.body.toString('utf8')}`)
     .digest('hex');
 
@@ -113,7 +128,7 @@ app.post('/payment/callback', express.raw({ type: 'application/json' }), (req, r
 
 ```php
 $raw = file_get_contents('php://input');
-$secret = getenv('STEVE_PAY_WEBHOOK_SECRET');
+$secret = getenv('STEVE_GATE_WEBHOOK_SECRET');
 
 parse_str(str_replace(',', '&', $_SERVER['HTTP_X_STEVEPAY_SIGNATURE'] ?? ''), $parts);
 $timestamp = $parts['t'] ?? '';
@@ -148,12 +163,12 @@ import hashlib, hmac, json, time
 from flask import Flask, request, abort
 
 app = Flask(__name__)
-SECRET = os.environ["STEVE_PAY_WEBHOOK_SECRET"].encode()
+SECRET = os.environ["STEVE_GATE_WEBHOOK_SECRET"].encode()
 
 @app.post("/payment/callback")
 def callback():
     raw = request.get_data()               # raw bytes, before any parsing
-    header = request.headers.get("X-StevePay-Signature", "")
+    header = request.headers.get("X-SteveGate-Signature", "")
 
     parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
     timestamp, provided = parts.get("t"), parts.get("v1")
@@ -169,7 +184,7 @@ def callback():
         abort(401, "bad signature")
 
     event = json.loads(raw)
-    # Persist with X-StevePay-Delivery as the unique key, so a retry cannot double-process.
+    # Persist with X-SteveGate-Delivery as the unique key, so a retry cannot double-process.
     return "ok", 200
 ```
 
@@ -178,13 +193,13 @@ def callback():
 ```bash
 BODY='{"event":"payment.success","amount":363706}'
 TS=$(date +%s)
-SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$STEVE_PAY_WEBHOOK_SECRET" -hex | awk '{print $2}')
+SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$STEVE_GATE_WEBHOOK_SECRET" -hex | awk '{print $2}')
 
 curl -X POST https://shop.example.com/payment/callback \
   -H "Content-Type: application/json" \
-  -H "X-StevePay-Signature: t=$TS,v1=$SIG" \
-  -H "X-StevePay-Event: payment.success" \
-  -H "X-StevePay-Timestamp: $TS" \
+  -H "X-SteveGate-Signature: t=$TS,v1=$SIG" \
+  -H "X-SteveGate-Event: payment.success" \
+  -H "X-SteveGate-Timestamp: $TS" \
   -d "$BODY"
 ```
 
@@ -204,7 +219,7 @@ first and queue the work. A slow handler is indistinguishable from a broken one 
 delivering the same event again.
 
 **Handle duplicates.** A retry after a timeout is not evidence that the first attempt failed; it may
-have succeeded and the response was lost. Key on `X-StevePay-Delivery` (stable across retries of
+have succeeded and the response was lost. Key on `X-SteveGate-Delivery` (stable across retries of
 one delivery) or on `invoiceId`, which is the more meaningful idempotency key for the merchant's
 own domain.
 

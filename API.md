@@ -390,7 +390,7 @@ curl -X POST https://steve-gate.ir/api/v1/payments \
 const response = await fetch('https://steve-gate.ir/api/v1/payments', {
   method: 'POST',
   headers: {
-    'X-API-Key': process.env.STEVE_PAY_KEY,
+    'X-API-Key': process.env.STEVE_GATE_KEY,
     // Derive this from your own order id so a retry cannot create a second invoice.
     'Idempotency-Key': `order_${order.id}`,
     'Content-Type': 'application/json',
@@ -406,7 +406,7 @@ const response = await fetch('https://steve-gate.ir/api/v1/payments', {
 if (!response.ok) {
   const error = await response.json();
   // error.code is stable; error.message is for humans; error.requestId is for support.
-  throw new Error(`Steve Pay ${error.code}: ${error.message} (${error.requestId})`);
+  throw new Error(`Steve Gate ${error.code}: ${error.message} (${error.requestId})`);
 }
 
 const { payment } = await response.json();
@@ -429,7 +429,7 @@ curl_setopt_array($ch, [
   CURLOPT_POSTFIELDS     => $payload,
   CURLOPT_RETURNTRANSFER => true,
   CURLOPT_HTTPHEADER     => [
-    'X-API-Key: ' . getenv('STEVE_PAY_KEY'),
+    'X-API-Key: ' . getenv('STEVE_GATE_KEY'),
     'Idempotency-Key: order_1234',
     'Content-Type: application/json',
   ],
@@ -443,7 +443,7 @@ $data = json_decode($body, true);
 
 if ($status !== 200) {
   // $data['code'] is the stable identifier; log $data['requestId'] too.
-  error_log("Steve Pay error {$data['code']}: {$data['requestId']}");
+  error_log("Steve Gate error {$data['code']}: {$data['requestId']}");
   exit(1);
 }
 
@@ -459,7 +459,7 @@ import requests
 response = requests.post(
     "https://steve-gate.ir/api/v1/payments",
     headers={
-        "X-API-Key": os.environ["STEVE_PAY_KEY"],
+        "X-API-Key": os.environ["STEVE_GATE_KEY"],
         "Idempotency-Key": f"order_{order_id}",
     },
     json={
@@ -472,7 +472,7 @@ response = requests.post(
 
 if response.status_code != 200:
     error = response.json()
-    raise RuntimeError(f"Steve Pay {error['code']}: {error['message']} ({error['requestId']})")
+    raise RuntimeError(f"Steve Gate {error['code']}: {error['message']} ({error['requestId']})")
 
 payment = response.json()["payment"]
 print(payment["paymentUrl"], payment["payableAmount"])

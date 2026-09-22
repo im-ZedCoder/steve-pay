@@ -23,7 +23,7 @@ import { WalletService } from '../services/wallet';
 import { CardService } from '../services/cards';
 import { WebhookService } from '../services/webhooks';
 import { NotificationService } from '../services/notifications';
-import { TelegramService } from '../services/telegram';
+import { TelegramService, telegramConfigFromSettings } from '../services/telegram';
 import { rateLimiterFor } from '../services/ratelimit';
 import { detectVolumeAnomaly } from '../core/risk';
 import { nowIso, addMinutes, tehranDayKey, lastDayKeys } from '../core/time';
@@ -247,9 +247,13 @@ const lowBalanceSweepJob: Job = {
       },
       notifications,
       logger,
+      // The same source the request path uses, so a bot configured in the console is the one
+      // this sweep notifies through. A cron has no request, and therefore no console page —
+      // reading settings is the only way it can see what an operator changed.
+      telegramConfigFromSettings(settings, secrets.sessionSecret),
     );
 
-    if (!telegram.available) return { skipped: true, reason: 'TELEGRAM_NOT_CONFIGURED' };
+    if (!(await telegram.isAvailable())) return { skipped: true, reason: 'TELEGRAM_NOT_CONFIGURED' };
 
     const threshold = await settings.int('wallet.low_balance_threshold_toman');
     const cooldown = await settings.int('wallet.notification_cooldown_minutes');

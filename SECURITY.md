@@ -149,7 +149,7 @@ The full API key is returned **exactly once**, at creation. It cannot be recover
 
 ### The key prefix collides with Stripe's
 
-Steve Pay keys are `sk_live_` followed by a 12-character id and a 32-character secret. That is
+Steve Gate keys are `sk_live_` followed by a 12-character id and a 32-character secret. That is
 `sk_live_` + 44 base62 characters, which is **byte-for-byte the shape of a Stripe secret key**, and
 GitHub's secret scanning matches it as one. Two consequences worth knowing before either surprises
 someone:
@@ -166,7 +166,7 @@ that confusion ever costs real time, changing the prefix to something unclaimed 
 ### Replay
 
 - **Inbound**: `Idempotency-Key` (24-hour window), SMS message hash, bank reference.
-- **Outbound**: every webhook carries `X-StevePay-Timestamp` and `X-StevePay-Delivery`. The
+- **Outbound**: every webhook carries `X-SteveGate-Timestamp` and `X-SteveGate-Delivery`. The
   signature covers the timestamp, so a captured request cannot be replayed later; merchants should
   reject a timestamp outside a few minutes.
 

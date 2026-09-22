@@ -16,7 +16,7 @@
  *   MERCHANT pays the fee
  *     customer transfers   original + suffix       (straight to the merchant's card)
  *     merchant receives    original + suffix at the bank, minus `fee` debited
- *                          from their Steve Pay wallet
+ *                          from their Steve Gate wallet
  *     platform receives    fee
  *
  * So the merchant's net is `original_amount` in CUSTOMER mode and
@@ -124,7 +124,7 @@ export function requiredWalletReserve(feeMode: FeeMode, gatewayFee: Toman): Toma
 /**
  * Reservation booked against the wallet while an invoice is live in MERCHANT mode.
  * The suffix is not part of it: the suffix lands in the merchant's own bank
- * account, not in their Steve Pay wallet.
+ * account, not in their Steve Gate wallet.
  */
 export function walletReservationFor(breakdown: FeeBreakdown): Toman {
   return breakdown.merchantFee;

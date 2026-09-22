@@ -107,7 +107,17 @@ export interface BankTemplate {
  * Test-token markers (§15). A message containing one of these is channelled into
  * the setup wizard and can never confirm an invoice, whatever else it says.
  */
-export const SMS_TEST_MARKERS = ['STEVE_PAY_TEST', 'STEVE-PAY-TEST', 'SPTEST'] as const;
+export const SMS_TEST_MARKERS = [
+  'STEVE_GATE_TEST',
+  // Kept after the rename, deliberately. A marker is not branding: it is what an operator is
+  // told to paste while standing at the forwarder with a test token in hand, and a merchant
+  // following a screenshot or a support reply written last week must not have their message
+  // fall through to the bank parser because the product changed its name. A marker cannot
+  // confirm an invoice in any case — that is the whole point of the list.
+  'STEVE_PAY_TEST',
+  'STEVE-PAY-TEST',
+  'SPTEST',
+] as const;
 
 /** Extracts the test token from a message, or null. Tokens look like SP-ABCD-EFGH. */
 export function extractTestToken(normalizedText: string): string | null {

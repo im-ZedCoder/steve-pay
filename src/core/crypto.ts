@@ -16,12 +16,30 @@
 
 const TEXT_ENCODER = new TextEncoder();
 
-/** PBKDF2 work factor. OWASP's 2023 floor for PBKDF2-SHA256 is 600,000; 210,000
- *  is the previous guidance and is what fits comfortably inside a Worker CPU
- *  budget while still being expensive to attack offline. Raise it if CPU budget
- *  allows — the stored format records the iteration count, so old hashes keep
- *  verifying after a change. */
-export const PBKDF2_ITERATIONS = 210_000;
+/**
+ * PBKDF2 work factor.
+ *
+ * Capped at 100,000 by the runtime, not by preference. WebCrypto in the Workers runtime
+ * refuses a higher count outright:
+ *
+ *   NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not supported
+ *
+ * and it refuses *before* deriving anything. That distinction is the whole reason this
+ * comment is long: the ceiling does not show up as a slow login, it shows up as a thrown
+ * error, so a value above it locks out every account at once. This constant was 210,000 —
+ * taken from OWASP's guidance, and a number the local test pool accepts happily, because
+ * the pool runs a different build of the same runtime than the network does. Every login in
+ * production failed for it, merchant and admin alike.
+ *
+ * `tests/pure-domain.test.ts` pins the ceiling so the next raise fails in CI rather than on
+ * the sign-in page. Because PBKDF2 is capped here, the rest of the defence has to carry more
+ * weight: a per-number login rate limit, an account lockout after repeated failures, and
+ * short admin session lifetimes.
+ *
+ * The stored format records the iteration count, so a hash written today keeps verifying if
+ * the runtime ever raises its ceiling.
+ */
+export const PBKDF2_ITERATIONS = 100_000;
 const PBKDF2_HASH = 'SHA-256';
 const SALT_BYTES = 16;
 const DERIVED_BITS = 256;

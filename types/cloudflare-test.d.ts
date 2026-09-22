@@ -10,18 +10,18 @@
  * alias to that type is.
  */
 
-type StevePayEnv = import('../src/env').Env;
-type StevePayMigration = import('@cloudflare/vitest-pool-workers').D1Migration;
+type SteveGateEnv = import('../src/env').Env;
+type SteveGateMigration = import('@cloudflare/vitest-pool-workers').D1Migration;
 
 declare module 'cloudflare:test' {
-  interface ProvidedEnv extends StevePayEnv {
-    TEST_MIGRATIONS: StevePayMigration[];
-    TEST_SEEDS: StevePayMigration[];
+  interface ProvidedEnv extends SteveGateEnv {
+    TEST_MIGRATIONS: SteveGateMigration[];
+    TEST_SEEDS: SteveGateMigration[];
   }
 
   export function applyD1Migrations(
     db: D1Database,
-    migrations: StevePayMigration[],
+    migrations: SteveGateMigration[],
     options?: { name?: string },
   ): Promise<void>;
 

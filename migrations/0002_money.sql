@@ -1,5 +1,5 @@
 -- =============================================================================
--- Steve Pay — migration 0002: money
+-- Steve Gate — migration 0002: money
 -- =============================================================================
 -- The financial core. Three invariants are enforced by the database itself
 -- rather than by application code, because application code is what changes:

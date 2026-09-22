@@ -232,7 +232,7 @@ function brandRow(backLabel: string, backHref: string): string {
   return `<div class="auth-mark">
   <span class="brand-tile" aria-hidden="true">S</span>
   <div class="auth-mark-text">
-    <b>Steve Pay</b>
+    <b>Steve Gate</b>
     <span>درگاه پرداخت کارت‌به‌کارت</span>
   </div>
   <a class="auth-out" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
@@ -358,13 +358,13 @@ export function loginPage(input: {
 
   return shell(
     {
-      title: input.admin ? 'ورود مدیران — Steve Pay' : 'ورود — Steve Pay',
+      title: input.admin ? 'ورود مدیران — Steve Gate' : 'ورود — Steve Gate',
       bodyClass: 'state-review',
       noindex: true,
       aurora: true,
     },
     authLayout({
-      title: input.admin ? 'ورود مدیران' : 'ورود به Steve Pay',
+      title: input.admin ? 'ورود مدیران' : 'ورود به Steve Gate',
       subtitle: input.admin ? 'کنسول مدیریت درگاه' : 'پنل پذیرندگان',
       body,
       foot,
@@ -527,10 +527,10 @@ export function registerPage(input: {
 </form>`;
 
   return shell(
-    { title: 'ثبت‌نام — Steve Pay', bodyClass: 'state-review', noindex: true, aurora: true },
+    { title: 'ثبت‌نام — Steve Gate', bodyClass: 'state-review', noindex: true, aurora: true },
     authLayout({
       title: 'ثبت‌نام پذیرنده',
-      subtitle: 'ساخت حساب جدید در Steve Pay',
+      subtitle: 'ساخت حساب جدید در Steve Gate',
       body,
       foot: '<a href="/login">حساب دارید؟ وارد شوید</a>',
       aside: asideFor('merchant'),
@@ -547,7 +547,7 @@ export function registerPage(input: {
 export function registeredPage(input: { merchantCode: string; mobile: string }): string {
   return shell(
     {
-      title: 'ثبت‌نام انجام شد — Steve Pay',
+      title: 'ثبت‌نام انجام شد — Steve Gate',
       bodyClass: 'state-review',
       noindex: true,
       aurora: true,

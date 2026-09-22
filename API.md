@@ -15,7 +15,11 @@ Send your API key in `X-API-Key`:
 X-API-Key: sk_live_<key-id><secret>
 ```
 
-`Authorization: Bearer sk_live_...` is also accepted, because SMS forwarder apps and generic HTTP
+The value is the prefix `sk_live_` followed by a 12-character key id and a 32-character secret —
+44 characters after the prefix. `sk_test_` is the same shape for the test environment. The full
+key is shown once, when it is created; only its hash is stored.
+
+`Authorization: Bearer <key>` is also accepted, because SMS forwarder apps and generic HTTP
 clients differ in which header they can set.
 
 Keys come in two environments:
@@ -368,7 +372,7 @@ Honour `Retry-After`.
 
 ```bash
 curl -X POST https://steve-pay.ir/api/v1/payments \
-  -H "X-API-Key: sk_live_xxxxxxxxxxxxxxxx" \
+  -H "X-API-Key: sk_live_<key-id><secret>" \
   -H "Idempotency-Key: order_1234" \
   -H "Content-Type: application/json" \
   -d '{"amount": 359000, "description": "Order #1234"}'

@@ -132,6 +132,20 @@ npm run check        # all four
 node scripts/verify-schema.mjs   # proves the 30 financial invariants hold
 ```
 
+### Deploy
+
+```bash
+npm run cf:setup -- --help                 # what it provisions, and the token permissions
+npm run cf:setup -- --dry-run              # report, change nothing
+npm run cf:setup -- --env both --yes       # do all of it
+npm run cf:setup:test                      # verify the script against a mock API
+```
+
+One command creates the D1 databases, KV namespaces and queues, writes their ids into
+`wrangler.jsonc`, applies migrations and seeds, generates and pushes the secrets, deploys, and
+bootstraps the first admin. It is idempotent and never deletes anything. See
+[DEPLOYMENT.md](./DEPLOYMENT.md#fast-path-one-command).
+
 ---
 
 ## Configuration

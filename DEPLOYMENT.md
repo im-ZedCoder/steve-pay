@@ -17,6 +17,59 @@ npx wrangler login
 
 ---
 
+## Fast path: one command
+
+Steps 1 through 6 below can be done by hand — they are written out because you should be able
+to read exactly what happens to your account — but `scripts/cloudflare-setup.mjs` does all of
+them in the right order and is safe to re-run:
+
+```bash
+# Create an API token at https://dash.cloudflare.com/profile/api-tokens with:
+#   Account → D1, Workers KV Storage, Queues, Workers Scripts   Edit
+#   Account → Account Settings                                  Read
+#   Zone    → Zone Read, DNS Edit
+#   User    → User Details                                      Read
+export CLOUDFLARE_API_TOKEN=...
+
+npm run cf:setup -- --env both --yes
+```
+
+It creates the D1 databases, KV namespaces and queues; resolves the `workers.dev` subdomain;
+checks that `steve-pay.ir` is a zone in the account; writes the real IDs into `wrangler.jsonc`
+without disturbing its comments; applies the migrations and seeds; generates and pushes the
+crypto secrets; deploys; and creates the first admin if `STEVE_PAY_ADMIN_MOBILE` and
+`STEVE_PAY_ADMIN_PASSWORD` are set.
+
+Useful flags: `--dry-run` reports what it would do and changes nothing, `--only`/`--skip`
+select phases, and `--env staging` provisions only staging. `--help` lists everything,
+including the exact token permissions.
+
+Three things it will not do, deliberately:
+
+- **Register the Telegram webhook.** That is a Telegram API call, not a Cloudflare one.
+- **Add `steve-pay.ir` to your account.** If the zone is missing it says so and skips the
+  production deploy, rather than failing at deploy time with an opaque route error.
+- **Touch anything it did not create.** There is no `destroy` path in it. It also refuses to
+  overwrite a `wrangler.jsonc` id that does not match the provisioned resource unless you pass
+  `--force-config`, so a re-run against the wrong account cannot silently redeploy the Worker
+  over different data.
+
+The generated secrets are written to `.cloudflare.secrets.<env>.json` (git-ignored). **Keep that
+file.** A re-run reuses it rather than regenerating, because `API_KEY_PEPPER` cannot be rotated
+without invalidating every API key hash in the database.
+
+To verify the script itself without a Cloudflare account:
+
+```bash
+npm run cf:setup:test
+```
+
+That runs it against a local mock of the Cloudflare API and asserts idempotency, the config
+patch, and that a dry run writes nothing. The mock's response shapes are checked against the
+Cloudflare OpenAPI spec, not invented.
+
+---
+
 ## 1. Create the resources
 
 ```bash

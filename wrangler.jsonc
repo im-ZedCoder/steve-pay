@@ -29,7 +29,7 @@
     {
       "binding": "DB",
       "database_name": "steve-pay",
-      "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+      "database_id": "98a5bae2-430f-4a9f-a1b4-2fab51179761",
       "migrations_dir": "migrations",
     },
   ],
@@ -39,7 +39,7 @@
       // Only used for caches that tolerate eventual consistency (settings, public invoice
       // snapshots, negative caches). All correctness-critical counters live in D1.
       "binding": "CACHE",
-      "id": "REPLACE_WITH_PRODUCTION_KV_ID",
+      "id": "0a952c56526d403b90281ccbe8a1ace6",
     },
   ],
 
@@ -80,7 +80,7 @@
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "staging",
-        "BASE_URL": "https://steve-pay-staging.<your-subdomain>.workers.dev",
+        "BASE_URL": "https://steve-pay-staging.xodeomid.workers.dev",
         "GATEWAY_FEE_TOMAN": "3000",
         "UNIQUE_SUFFIX_DIGITS": "4",
         "TURNSTILE_SITE_KEY": "",
@@ -114,12 +114,12 @@
         {
           "binding": "DB",
           "database_name": "steve-pay",
-          "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+          "database_id": "98a5bae2-430f-4a9f-a1b4-2fab51179761",
           "migrations_dir": "migrations",
         },
       ],
       "kv_namespaces": [
-        { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
+        { "binding": "CACHE", "id": "0a952c56526d403b90281ccbe8a1ace6" },
       ],
     },
   },

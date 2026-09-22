@@ -24,6 +24,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply steve-pay --remote --env production",
     "db:seed:local": "wrangler d1 execute steve-pay --local --file seeds/0001_settings.sql",
     "db:seed:remote": "wrangler d1 execute steve-pay --remote --env production --file seeds/0001_settings.sql",
+    "cf:setup": "node scripts/cloudflare-setup.mjs",
+    "cf:setup:test": "node scripts/cloudflare-setup.selftest.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "backup:export": "node scripts/export-backup.mjs",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"

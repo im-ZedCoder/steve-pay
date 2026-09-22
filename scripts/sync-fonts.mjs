@@ -11,11 +11,16 @@
  * set is a deliberate budget rather than "whatever is available":
  *
  *   payment page   arabic 400 + arabic 700          ~43 KB, two faces
+ *   headline       Estedad arabic 800/900           the display face
  *   dashboard      + arabic 500, latin 400/700      adds the Latin identifier faces
  *   mono           IBM Plex Mono 400/500            API keys, invoice IDs, curl samples
  *
+ * Estedad is the display face: headings, the brand, and the amount on the payment
+ * card. Two weights only — 800 and 900 — because it is a signal, not a texture, and
+ * a display face that ships in five weights stops being one.
+ *
  * Everything is subset by script and by weight, so a page only ever downloads the
- * faces it actually renders. The payment page never downloads a Latin face.
+ * faces it actually renders. The payment page never downloads a Latin text face.
  */
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, copyFileSync, statSync, readdirSync } from 'node:fs';
@@ -37,6 +42,8 @@ const WANTED = [
   ['@fontsource/vazirmatn', 'vazirmatn-arabic-700-normal.woff2', 'vazirmatn-arabic-700.woff2'],
   ['@fontsource/vazirmatn', 'vazirmatn-latin-400-normal.woff2', 'vazirmatn-latin-400.woff2'],
   ['@fontsource/vazirmatn', 'vazirmatn-latin-700-normal.woff2', 'vazirmatn-latin-700.woff2'],
+  ['@fontsource/estedad', 'estedad-arabic-800-normal.woff2', 'estedad-arabic-800.woff2'],
+  ['@fontsource/estedad', 'estedad-arabic-900-normal.woff2', 'estedad-arabic-900.woff2'],
   ['@fontsource/ibm-plex-mono', 'ibm-plex-mono-latin-400-normal.woff2', 'plex-mono-400.woff2'],
   ['@fontsource/ibm-plex-mono', 'ibm-plex-mono-latin-500-normal.woff2', 'plex-mono-500.woff2'],
 ];

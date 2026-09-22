@@ -10,15 +10,22 @@
  *
  * WHY THIS EXISTS
  *
- * `wrangler.jsonc` ships with placeholders (`REPLACE_WITH_PRODUCTION_D1_ID`) because a real
- * D1 id is account-specific and cannot be committed. A first deployment therefore means a
- * manual tour of five dashboard pages — D1, KV, Queues, the workers.dev subdomain, and the
- * custom domain — followed by hand-editing the config, three `secret put` calls, a migration
- * run, a fresh `wrangler deploy`, and only then the admin bootstrap. Every one of those steps
- * has a plausible way to go wrong quietly, and the quiet ones are the expensive ones: a
- * secret left unset falls back to a development placeholder, migrations applied to the
- * staging database look exactly like migrations applied to production from the outside, and
- * a KV namespace bound to the wrong id works fine until the first cache read.
+ * A first deployment means a manual tour of five dashboard pages — D1, KV, Queues, the Pages
+ * project, and the secrets — followed by hand-editing two config files, three `secret put`
+ * calls, a migration run, a fresh deploy, and only then the admin bootstrap. Every one of
+ * those steps has a plausible way to go wrong quietly, and the quiet ones are the expensive
+ * ones: a secret left unset falls back to a development placeholder, migrations applied to
+ * the wrong database look identical from the outside, and a KV namespace bound to the wrong
+ * id works fine until the first cache read.
+ *
+ * TWO DEPLOY TARGETS, AND THAT IS NOT AN ACCIDENT
+ *
+ * The web application is a Cloudflare **Pages** project. Pages Functions cannot run a
+ * `scheduled()` handler and cannot be a queue consumer, so the cron sweeper and the webhook
+ * retry queue live in a companion Worker (`wrangler.worker.jsonc`). Both bind the same D1
+ * database and KV namespace. This script provisions and deploys both, in the order that
+ * leaves a working site at the end of it: resources, schema, secrets, then Pages, then the
+ * companion Worker.
  *
  * DESIGN DECISIONS
  *
@@ -44,9 +51,11 @@
  * WHAT IT CANNOT DO
  *
  *   - Register the Telegram webhook. That is a Telegram API call, not a Cloudflare one.
- *   - Add `steve-pay.ir` to your account if the zone is not already in it. The script
- *     detects this and tells you, rather than failing at deploy time with a route error.
- *   - Verify DNS is not proxied elsewhere. It checks the zone exists and moves on.
+ *   - Attach a custom domain. There is no domain anywhere in this repository: the platform
+ *     reads its own origin from each request, so it answers correctly on
+ *     `<project>.pages.dev` from the first deploy. Add the domain in the dashboard
+ *     (Workers & Pages → your Pages project → Custom domains) whenever you like, and the
+ *     application needs no redeploy and no configuration change when you do.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -58,48 +67,55 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+/** The Pages project config: bindings, vars and the output directory. */
 const WRANGLER_PATH = join(ROOT, 'wrangler.jsonc');
+/** The companion Worker config: the same bindings plus crons and the queue consumer. */
+const WORKER_CONFIG_PATH = join(ROOT, 'wrangler.worker.jsonc');
 // Overridable so `scripts/cloudflare-setup.selftest.mjs` can point the same code at a local
 // mock and assert its behaviour without a real account. Nothing else should set it.
 const API = process.env.CLOUDFLARE_API_BASE ?? 'https://api.cloudflare.com/client/v4';
 
-// Resource names. These must match `wrangler.jsonc`; the config patch phase would produce a
-// broken deployment if they drifted apart, so they are the single source of truth here.
+/**
+ * Resource names. These must match both config files; the config phase would otherwise
+ * "verify" a deployment that points somewhere the script never created.
+ *
+ * `project` is the Pages project and `jobs` is the companion Worker, which is why they
+ * differ — a Pages project and a Worker cannot share a name in the same account.
+ */
 const RESOURCES = {
   production: {
-    worker: 'steve-pay',
+    project: 'steve-pay',
+    jobs: 'steve-pay-jobs',
     d1: 'steve-pay',
     kv: 'steve-pay-cache',
     queue: 'steve-pay-webhooks',
     dlq: 'steve-pay-webhooks-dlq',
-  },
-  staging: {
-    worker: 'steve-pay-staging',
-    d1: 'steve-pay-staging',
-    kv: 'steve-pay-cache-staging',
-    queue: 'steve-pay-webhooks-staging',
-    dlq: 'steve-pay-webhooks-staging-dlq',
   },
 };
 
 /**
  * The phases, in the order they must run.
  *
- * `config` sits between the resources and the deploy because the deploy reads the ids that
- * `config` writes. `migrate` sits before `deploy` so the first request to the new Worker
- * finds a schema rather than a 500 — the code is not written to run against an empty
- * database, and it should not have to be.
+ * `pages` comes after the resources because a Pages project cannot be created with its
+ * bindings attached — they are pushed on the first deploy, from the config file. `config`
+ * sits between the resources and the deploy because the deploy reads the ids that `config`
+ * checks. `migrate` sits before `deploy` so the first request to the new deployment finds a
+ * schema rather than a 500 — the code is not written to run against an empty database, and
+ * it should not have to be.
+ *
+ * There is no `domain` phase. Nothing in this repository names a hostname, so there is
+ * nothing for the script to attach or verify; the custom domain is added in the dashboard
+ * and the application picks it up from the next request it serves.
  */
-const PHASES = ['verify', 'd1', 'kv', 'queues', 'subdomain', 'domain', 'config', 'migrate', 'secrets', 'deploy', 'admin'];
+const PHASES = ['verify', 'd1', 'kv', 'queues', 'pages', 'config', 'migrate', 'secrets', 'deploy', 'admin'];
 
 const TOKEN_PERMISSIONS = [
   ['Account', 'D1', 'Edit'],
   ['Account', 'Workers KV Storage', 'Edit'],
   ['Account', 'Queues', 'Edit'],
   ['Account', 'Workers Scripts', 'Edit'],
+  ['Account', 'Cloudflare Pages', 'Edit'],
   ['Account', 'Account Settings', 'Read'],
-  ['Zone', 'Zone', 'Read'],
-  ['Zone', 'DNS', 'Edit'],
   ['User', 'User Details', 'Read'],
 ];
 
@@ -160,7 +176,7 @@ ${bold('Provision Steve Pay on Cloudflare.')}
 ${bold('Options')}
   --token <value>          Cloudflare API token (or CLOUDFLARE_API_TOKEN / CF_API_TOKEN)
   --account <id>           Account id. Discovered from the token when omitted.
-  --env <name>             production | staging | both      (default: production)
+  --env <name>             production (the only configured environment)
   --secrets <path>         JSON file of secrets to push (see below)
   --turnstile-site-key <k> Public Turnstile site key, written into wrangler.jsonc vars
   --only <a,b>             Run only these phases
@@ -188,7 +204,7 @@ ${bold('Required token permissions')}
 ${TOKEN_PERMISSIONS.map(([scope, group, level]) => `  ${scope.padEnd(8)} ${group.padEnd(22)} ${level}`).join('\n')}
 
 ${bold('Example')}
-  npm run cf:setup -- --token cf_xxx --env both --yes
+  npm run cf:setup -- --token cf_xxx --env production --yes
 `);
 }
 
@@ -267,8 +283,12 @@ function parseArgs(argv) {
     }
   }
 
-  if (!['production', 'staging', 'both'].includes(args.env)) {
-    console.error(`Invalid --env "${args.env}". Expected production, staging or both.`);
+  // Staging used to be a second named environment in wrangler.jsonc. It is gone: the config
+  // now describes one Pages project and one companion Worker. A silent fallback to
+  // production would be the worst possible answer to `--env staging`, so it is refused.
+  if (args.env !== 'production') {
+    console.error(`Invalid --env "${args.env}". Only "production" is configured.`);
+    console.error('For a staging deployment, add an `env.staging` block to both config files first.');
     process.exit(1);
   }
 
@@ -369,15 +389,16 @@ function reportApiFailure(error, what) {
 // ---------------------------------------------------------------------------
 
 /**
- * Replaces exact strings in the project's wrangler config.
+ * Replaces exact strings in one of the project's wrangler configs.
  *
- * Text-level on purpose. `wrangler.jsonc` is the primary explanation of this deployment —
+ * Text-level on purpose. Both config files are the primary explanation of this deployment —
  * why the compatibility date is pinned, why KV holds only cache, why the queue has a dead
- * letter queue — and round-tripping it through `JSON.parse`/`JSON.stringify` would delete
- * every one of those comments to save writing eight lines of string replacement.
+ * letter queue, why the companion Worker exists at all — and round-tripping them through
+ * `JSON.parse`/`JSON.stringify` would delete every one of those comments to save writing
+ * eight lines of string replacement.
  */
-function patchConfig(replacements, { dryRun }) {
-  const original = readFileSync(WRANGLER_PATH, 'utf8');
+function patchConfig(replacements, { dryRun, path = WRANGLER_PATH }) {
+  const original = readFileSync(path, 'utf8');
   let next = original;
   const applied = [];
   const missing = [];
@@ -395,21 +416,30 @@ function patchConfig(replacements, { dryRun }) {
 
   if (applied.length === 0) return { changed: false, applied, missing };
 
-  if (!dryRun) writeFileSync(WRANGLER_PATH, next, 'utf8');
+  if (!dryRun) writeFileSync(path, next, 'utf8');
   return { changed: true, applied, missing };
 }
 
-/** Reads the ids currently in the config, so a re-run can report instead of guess. */
-function currentConfigIds() {
-  const text = readFileSync(WRANGLER_PATH, 'utf8');
+/**
+ * The ids each config file currently points at.
+ *
+ * Both files bind the same database and the same KV namespace, so both are read: a run that
+ * patched one and not the other would deploy a Pages project and a companion Worker reading
+ * two different databases, and nothing about that failure is visible until a cron job
+ * reports on data no customer ever wrote.
+ */
+function currentConfigIds(path = WRANGLER_PATH) {
+  const text = readFileSync(path, 'utf8');
   const read = (key) => {
     const match = new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`).exec(text);
     return match?.[1] ?? null;
   };
+  const placeholders = [...text.matchAll(/REPLACE_WITH_[A-Z0-9_]+/g)].map((match) => match[0]);
   return {
-    productionD1: read('database_id'),
-    productionKv: read('id'),
-    hasPlaceholders: /REPLACE_WITH_[A-Z_]+/.test(text),
+    d1: read('database_id'),
+    kv: read('id'),
+    hasPlaceholders: placeholders.length > 0,
+    placeholders: [...new Set(placeholders)],
   };
 }
 
@@ -549,15 +579,67 @@ async function phaseVerify(state) {
     detail('This is only expected when running the self-test.');
   }
 
-  // A worker that is already deployed tells us this is a re-run, which changes the tone of
-  // the rest of the output but not the behaviour.
-  try {
-    await cf(`/accounts/${state.account}/workers/scripts/steve-pay`, { token: state.token });
+  // A project that already exists tells us this is a re-run. That changes the tone of the
+  // rest of the output but not the behaviour: every phase is idempotent.
+  const projects = await listPagesProjects(state);
+  const existing = projects.find((project) => project.name === RESOURCES.production.project);
+  if (existing) {
     state.alreadyDeployed = true;
-    detail("Worker 'steve-pay' already exists — this looks like a re-run.");
-  } catch (error) {
-    if (!(error instanceof CloudflareError) || error.status !== 404) throw error;
+    detail(`Pages project '${existing.name}' already exists — this looks like a re-run.`);
+    if (existing.subdomain) state.pagesUrl = `https://${existing.subdomain}`;
   }
+}
+
+/**
+ * Every Pages project in the account.
+ *
+ * The API paginates; one page of a hundred is the practical ceiling for an account and
+ * asking for more in a loop here would be code that never runs.
+ */
+async function listPagesProjects(state) {
+  return (await cf(`/accounts/${state.account}/pages/projects?per_page=100`, { token: state.token })) ?? [];
+}
+
+/**
+ * Ensures the Pages project exists.
+ *
+ * Created empty on purpose. Pages attaches D1, KV and queue bindings from the Wrangler
+ * configuration on the first deploy rather than at project creation, so there is nothing to
+ * pass here — and a project created with bindings set through this API would be a second
+ * source of truth that the config file could disagree with.
+ */
+async function phasePages(state) {
+  phase('pages');
+
+  const name = RESOURCES.production.project;
+  const projects = await listPagesProjects(state);
+  const found = projects.find((project) => project.name === name);
+
+  if (found) {
+    existed(`Pages project ${name}`);
+    if (found.subdomain) {
+      state.pagesUrl = `https://${found.subdomain}`;
+      log(`url: ${bold(state.pagesUrl)}`);
+    }
+    return;
+  }
+
+  if (state.dryRun) {
+    log(`would create Pages project ${name}`);
+    return;
+  }
+
+  const made = await cf(`/accounts/${state.account}/pages/projects`, {
+    method: 'POST',
+    token: state.token,
+    body: { name, production_branch: 'main' },
+  });
+  created(`Pages project ${name}`);
+
+  const subdomain = made?.subdomain ?? `${name}.pages.dev`;
+  state.pagesUrl = `https://${subdomain}`;
+  log(`url: ${bold(state.pagesUrl)}`);
+  detail('This is the address the application already answers on — no domain is configured.');
 }
 
 async function phaseD1(state) {
@@ -659,157 +741,160 @@ async function phaseQueues(state) {
   }
 }
 
-async function phaseSubdomain(state) {
-  phase('subdomain');
-
-  try {
-    const result = await cf(`/accounts/${state.account}/workers/subdomain`, { token: state.token });
-    state.subdomain = result?.subdomain ?? null;
-  } catch (error) {
-    if (error instanceof CloudflareError && error.status === 404) {
-      warn('No workers.dev subdomain is registered for this account.');
-      detail('wrangler will prompt for one on first deploy, or set it in the dashboard.');
-      state.subdomain = null;
-      return;
-    }
-    throw error;
-  }
-
-  if (state.subdomain) log(`workers.dev subdomain: ${bold(`${state.subdomain}.workers.dev`)}`);
-}
-
-async function phaseDomain(state) {
-  phase('domain');
-
-  if (!state.environments.includes('production')) {
-    detail('Skipped: only the production environment uses the custom domain.');
-    return;
-  }
-
-  // The production routes in wrangler.jsonc are `custom_domain` entries. Deploying with them
-  // when the zone is not in this account fails the whole deploy, so this is checked up front
-  // where the message can name the actual problem.
-  const zones = await cf('/zones?name=steve-pay.ir&per_page=1', { token: state.token });
-
-  if (!zones || zones.length === 0) {
-    state.zoneMissing = true;
-    warn('steve-pay.ir is not a zone in this Cloudflare account.');
-    detail('Add the domain to this account and point its nameservers at Cloudflare, or:');
-    detail('  - deploy to the workers.dev subdomain instead by removing the `routes` block from');
-    detail('    `env.production` in wrangler.jsonc,');
-    detail('  - then re-run with --skip domain,deploy and deploy by hand.');
-    return;
-  }
-
-  state.zoneId = zones[0].id;
-  log(`zone: ${zones[0].name} ${dim(zones[0].id)} ${dim(`(${zones[0].status})`)}`);
-
-  if (zones[0].status !== 'active') {
-    warn(`Zone status is "${zones[0].status}". A custom domain cannot attach until it is active.`);
-    detail('The deploy will still create the Worker; the route will attach once the zone is active.');
-  }
-}
-
+/**
+ * Points both config files at the resources this run resolved.
+ *
+ * The ids are the one thing that cannot be committed for someone else's account, so this is
+ * the phase that makes a first deploy work on a fresh Cloudflare account. It is written to
+ * handle three states honestly:
+ *
+ *   placeholders present  → replace them
+ *   ids present and equal → report and move on
+ *   ids present and wrong → report, and refuse to overwrite without --force-config
+ *
+ * The third case matters: the ids in this repository belong to a real account, and a script
+ * that silently rewrote them would move a live deployment's database without saying so.
+ */
 async function phaseConfig(state) {
   phase('config');
 
-  const replacements = [];
+  const targets = [
+    { label: 'wrangler.jsonc (Pages)', path: WRANGLER_PATH },
+    { label: 'wrangler.worker.jsonc (companion Worker)', path: WORKER_CONFIG_PATH },
+  ];
 
-  for (const envName of state.environments) {
-    const d1Id = state.d1?.[envName] ?? RESOURCES[envName].d1;
-    const kvId = state.kv?.[envName] ?? RESOURCES[envName].kv;
-    const prefix = envName === 'production' ? 'PRODUCTION' : 'STAGING';
+  const d1Id = state.d1?.production ?? null;
+  const kvId = state.kv?.production ?? null;
 
-    replacements.push([`REPLACE_WITH_${prefix}_D1_ID`, d1Id]);
-    replacements.push([`REPLACE_WITH_${prefix}_KV_ID`, kvId]);
-  }
+  for (const target of targets) {
+    const before = currentConfigIds(target.path);
+    const replacements = [];
 
-  if (state.subdomain) {
-    replacements.push(['<your-subdomain>', state.subdomain]);
-  }
+    for (const placeholder of before.placeholders) {
+      if (placeholder.includes('D1') && d1Id) replacements.push([placeholder, d1Id]);
+      if (placeholder.includes('KV') && kvId) replacements.push([placeholder, kvId]);
+    }
 
-  if (state.turnstileSiteKey) {
-    // Every occurrence, including the top-level and staging vars. One site key per project is
-    // the normal case; a separate key per environment is a manual edit.
-    replacements.push(['"TURNSTILE_SITE_KEY": ""', `"TURNSTILE_SITE_KEY": "${state.turnstileSiteKey}"`]);
-  }
+    if (state.turnstileSiteKey) {
+      replacements.push([
+        '"TURNSTILE_SITE_KEY": ""',
+        `"TURNSTILE_SITE_KEY": "${state.turnstileSiteKey}"`,
+      ]);
+    }
 
-  const before = currentConfigIds();
-
-  if (!before.hasPlaceholders) {
-    detail('No placeholders left in wrangler.jsonc.');
-    if (state.d1?.production && before.productionD1 && before.productionD1 !== state.d1.production) {
-      warn(`wrangler.jsonc points at D1 ${before.productionD1} but "${RESOURCES.production.d1}" is ${state.d1.production}.`);
-      if (!state.forceConfig) {
-        detail('Refusing to overwrite an id that was not written by this script. Re-run with --force-config.');
-        return;
+    if (replacements.length === 0) {
+      if (before.hasPlaceholders) {
+        warn(`${target.label} still has placeholders this run could not resolve: ${before.placeholders.join(', ')}`);
+      } else if (d1Id && before.d1 && before.d1 !== d1Id) {
+        warn(`${target.label} points at D1 ${before.d1} but the account has ${d1Id}.`);
+        if (state.forceConfig) {
+          replacements.push([before.d1, d1Id]);
+          if (kvId && before.kv) replacements.push([before.kv, kvId]);
+        } else {
+          detail('Refusing to overwrite ids this script did not write. Re-run with --force-config.');
+        }
+      } else {
+        log(`${target.label}: already matches the provisioned resources.`);
       }
-      replacements.push([before.productionD1, state.d1.production]);
-      if (before.productionKv && state.kv?.production) replacements.push([before.productionKv, state.kv.production]);
-    } else {
-      log('Configuration already matches the provisioned resources.');
-      return;
     }
-  }
 
-  const result = patchConfig(replacements, { dryRun: state.dryRun });
+    if (replacements.length === 0) continue;
 
-  if (!result.changed) {
-    warn('Nothing to patch. This is unexpected — check wrangler.jsonc for placeholder drift.');
-    return;
-  }
+    const result = patchConfig(replacements, { dryRun: state.dryRun, path: target.path });
 
-  for (const [from, to] of result.applied) {
-    if (from.includes('<your-subdomain>') || from.includes('TURNSTILE')) {
-      log(`${from} ${dim('→')} ${to === '' ? '(cleared)' : to}`);
-    } else {
-      log(`${dim(from)} ${dim('→')} ${to}`);
+    if (!result.changed) {
+      warn(`${target.label}: nothing to patch, which is unexpected — check it for placeholder drift.`);
+      continue;
     }
-  }
 
-  for (const from of result.missing) {
-    detail(`not present, skipped: ${from}`);
-  }
+    if (state.dryRun) {
+      log(`${target.label}: would replace ${result.applied.length} value(s)`);
+      continue;
+    }
 
-  if (state.dryRun) {
-    detail('dry run: wrangler.jsonc was not modified.');
-  } else {
-    log(`${green('wrangler.jsonc updated.')} ${dim('It is tracked by git — commit it so the deployment is reproducible.')}`);
+    log(`${green(`${target.label} updated`)} ${dim(`(${result.applied.length} value(s)`)}${dim(')')}`);
+    for (const from of result.missing) detail(`not present, skipped: ${from}`);
   }
 }
 
 async function phaseMigrate(state) {
   phase('migrate');
 
-  for (const envName of state.environments) {
-    const database = RESOURCES[envName].d1;
-    const wranglerEnv = envName === 'production' ? 'production' : 'staging';
+  const database = RESOURCES.production.d1;
 
-    if (state.dryRun) {
-      log(`would apply migrations + seeds to ${database} (remote, ${wranglerEnv})`);
-      continue;
-    }
+  if (state.dryRun) {
+    log(`would apply migrations + seeds to ${database} (remote)`);
+    return;
+  }
 
-    log(`migrations → ${bold(database)} ${dim(`(--remote --env ${wranglerEnv})`)}`);
-    try {
-      wrangler(['d1', 'migrations', 'apply', database, '--remote', '--env', wranglerEnv], state.childEnv);
-    } catch (error) {
-      fail(`Migrations failed for ${database}.`);
-      if (envName === 'production') {
-        detail('Refusing to continue: deploying code against an unmigrated production database');
-        detail('is how a schema mismatch becomes a 500 on the first live payment.');
+  // Migrations are read from `migrations_dir` in the config, so the command needs a config
+  // file even though it names the database explicitly. The Pages config is used because it
+  // is the file `wrangler d1` resolves without an `--env`.
+  log(`migrations → ${bold(database)} ${dim('(--remote)')}`);
+  try {
+    wrangler(['d1', 'migrations', 'apply', database, '--remote'], state.childEnv);
+  } catch (error) {
+    fail(`Migrations failed for ${database}.`);
+    detail('Refusing to continue: deploying code against an unmigrated database is how a');
+    detail('schema mismatch becomes a 500 on the first live payment.');
+    process.exit(error.status ?? 1);
+  }
+
+  // The settings seed is idempotent (`ON CONFLICT DO NOTHING`), so running it on an existing
+  // database is a no-op rather than a duplicate-key failure.
+  log(`seeds → ${bold(database)}`);
+  try {
+    wrangler(['d1', 'execute', database, '--remote', '--file', 'seeds/0001_settings.sql'], state.childEnv);
+  } catch (error) {
+    warn('Seed failed. The schema is in place, so the app will boot with default settings.');
+    detail(String(error.message));
+  }
+}
+
+/**
+ * Pushes the secrets to both deploy targets.
+ *
+ * Both, and this is not belt-and-braces: the Pages project verifies sessions and the
+ * companion Worker opens the same encrypted columns. A `WEBHOOK_SECRET` present on one and
+ * not the other means signatures verify in the request path and deliveries enqueued from
+ * cron do not, which reads as "webhooks work except the retries".
+ */
+async function pushSecrets(state, names, payload, target) {
+  // Pages and Workers have separate secret commands: `wrangler pages secret` addresses a
+  // Pages project by name, while `wrangler secret` addresses whatever Worker the config file
+  // describes. Running the Worker command for both would write the secrets onto the
+  // companion Worker twice and leave the Pages project — the one that serves every request —
+  // with none of them.
+  const prefix = target === 'pages' ? ['pages', 'secret'] : ['secret'];
+  const scope =
+    target === 'pages'
+      ? ['--project-name', RESOURCES.production.project]
+      : ['-c', 'wrangler.worker.jsonc'];
+
+  const bulkPath = join(ROOT, `.cloudflare-secrets-${target}.tmp.json`);
+  writeFileSync(bulkPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
+
+  try {
+    wrangler([...prefix, 'bulk', bulkPath, ...scope], state.childEnv);
+    created(`${names.length} secret(s) uploaded to ${target}`);
+  } catch {
+    warn(`bulk upload failed for ${target}; falling back to one \`secret put\` each.`);
+    for (const name of names) {
+      try {
+        wrangler([...prefix, 'put', name, ...scope], state.childEnv, { input: `${payload[name]}\n` });
+        detail(`pushed ${name}`);
+      } catch {
+        fail(`Could not push ${name} to ${target}.`);
       }
-      process.exit(error.status ?? 1);
     }
-
-    // The settings seed is idempotent (`ON CONFLICT DO NOTHING`), so running it on an
-    // existing database is a no-op rather than a duplicate-key failure.
-    log(`seeds → ${bold(database)}`);
+  } finally {
+    // The temp file must not survive the run: it holds live production secrets.
+    writeFileSync(bulkPath, '');
     try {
-      wrangler(['d1', 'execute', database, '--remote', '--env', wranglerEnv, '--file', 'seeds/0001_settings.sql'], state.childEnv);
-    } catch (error) {
-      warn('Seed failed. The schema is in place, so the app will boot with default settings.');
-      detail(String(error.message));
+      const { rmSync } = await import('node:fs');
+      rmSync(bulkPath, { force: true });
+    } catch {
+      warn(`Could not delete ${bulkPath}. Delete it by hand — it contains secrets.`);
     }
   }
 }
@@ -819,51 +904,26 @@ async function phaseSecrets(state) {
 
   for (const envName of state.environments) {
     const { secrets, path } = resolveSecrets(envName, state.suppliedSecrets);
-    const wranglerEnv = envName === 'production' ? 'production' : 'staging';
 
     const names = Object.keys(secrets).filter((name) => secrets[name] !== undefined && secrets[name] !== '');
     const generated = GENERATED_SECRETS.filter((name) => secrets[name]);
+    const payload = Object.fromEntries(names.map((name) => [name, String(secrets[name])]));
 
     log(`${bold(envName)}: ${names.length} secret(s) ${dim('→')} ${names.join(', ')}`);
 
     if (state.dryRun) {
-      log(`would push ${names.length} secret(s) with \`wrangler secret bulk\``);
+      log(`would push ${names.length} secret(s) to the Pages project and the companion Worker`);
     } else {
-      // `secret bulk` takes a JSON file. A temp file inside the project would risk being
-      // committed; `wrangler secret put` per secret would put each value on a command line
-      // and in the shell history. The file is written to the project root with 0600 and
-      // matched by .gitignore, which is the narrowest option that keeps the values off
-      // every command line.
-      const payload = Object.fromEntries(names.map((name) => [name, String(secrets[name])]));
-      const bulkPath = join(ROOT, `.cloudflare-secrets-${envName}.tmp.json`);
-      writeFileSync(bulkPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
-
-      try {
-        wrangler(['secret', 'bulk', bulkPath, '--env', wranglerEnv], state.childEnv);
-        created(`${names.length} secret(s) uploaded to ${envName}`);
-      } catch {
-        warn('`wrangler secret bulk` failed; falling back to one `secret put` per secret.');
-        for (const name of names) {
-          try {
-            wrangler(['secret', 'put', name, '--env', wranglerEnv], state.childEnv, {
-              input: `${secrets[name]}\n`,
-            });
-            detail(`pushed ${name}`);
-          } catch {
-            fail(`Could not push ${name}.`);
-          }
-        }
-      } finally {
-        // The temp file must not survive the run: it holds live production secrets.
-        writeFileSync(bulkPath, '');
-        try {
-          const { rmSync } = await import('node:fs');
-          rmSync(bulkPath, { force: true });
-        } catch {
-          warn(`Could not delete ${bulkPath}. Delete it by hand — it contains secrets.`);
-        }
-      }
+      // Pages secrets are not read from `.dev.vars`-style files and `wrangler pages secret`
+      // has its own subcommand; `secret bulk --project-name` targets the Pages project.
+      await pushSecrets(state, names, payload, 'pages');
+      await pushSecrets(state, names, payload, 'worker');
     }
+
+    // `secret bulk` takes a JSON file. A temp file inside the project would risk being
+    // committed; one `secret put` per secret would put each value on a command line and in
+    // the shell history. The file is written to the project root with 0600 and matched by
+    // .gitignore, which is the narrowest option that keeps the values off every command line.
 
     // The generated file is kept so a re-run does not rotate the crypto secrets, which would
     // invalidate every session cookie and every stored API key hash.
@@ -880,36 +940,62 @@ async function phaseSecrets(state) {
   }
 }
 
+/**
+ * Deploys the Pages project, then the companion Worker.
+ *
+ * That order, and it matters. The Pages deploy pushes the bindings into the project, which
+ * is what creates the queue producer. If the consumer went up first it would be bound to a
+ * queue with no producer and a cron schedule whose jobs write rows nothing reads — harmless
+ * for a minute, but it makes a failed Pages deploy look like a successful one.
+ */
 async function phaseDeploy(state) {
   phase('deploy');
 
-  if (state.zoneMissing && state.environments.includes('production')) {
-    warn('Skipping the production deploy: steve-pay.ir is not a zone in this account, so the');
-    detail('custom-domain route would fail the deploy. See the `domain` phase above.');
-    state.environments = state.environments.filter((envName) => envName !== 'production');
+  if (state.dryRun) {
+    log('would run: npm run build  (fonts + assets + bundle → dist-pages/)');
+    log(`would run: wrangler pages deploy dist-pages --no-bundle --project-name ${RESOURCES.production.project}`);
+    log('would run: wrangler deploy -c wrangler.worker.jsonc');
+    return;
   }
 
-  for (const envName of state.environments) {
-    const wranglerEnv = envName === 'production' ? 'production' : 'staging';
+  // `npm run build` regenerates the fonts and the client script first. They are generated,
+  // not committed, and a deploy without them ships pages whose stylesheet 404s — which
+  // renders as unstyled HTML rather than as an error, so it fails quietly.
+  log('building dist-pages/');
+  try {
+    runChild('npm', ['run', 'build'], { quiet: true });
+  } catch (error) {
+    fail('The build failed. Nothing was deployed.');
+    detail(String(error.message));
+    process.exit(error.status ?? 1);
+  }
 
-    if (state.dryRun) {
-      log(`would run: npm run fonts && npm run assets && wrangler deploy --env ${wranglerEnv}`);
-      continue;
-    }
+  // `--no-bundle`: the artifact in `dist-pages/_worker.js` was produced by Wrangler's own
+  // bundler, so running Pages' bundler over it would be a second build of an already-built
+  // file — slower, and a chance for the two to disagree about the output.
+  log(`deploying Pages project ${bold(RESOURCES.production.project)}`);
+  try {
+    wrangler(
+      ['pages', 'deploy', 'dist-pages', '--no-bundle', '--project-name', RESOURCES.production.project],
+      state.childEnv,
+    );
+    created('Pages deployment live');
+  } catch (error) {
+    fail('Pages deploy failed. The companion Worker was not deployed.');
+    detail('Deploying the cron jobs against a site that is not live would run rollups and');
+    detail('expiry sweeps for traffic that cannot arrive.');
+    process.exit(error.status ?? 1);
+  }
 
-    // The stylesheet and the client script are generated, not committed. Deploying without
-    // them ships a Worker whose pages reference a missing stylesheet — which renders as a
-    // plain, unstyled HTML page rather than as an error, so it fails quietly.
-    runChild('npm', ['run', 'fonts'], { quiet: true });
-    runChild('npm', ['run', 'assets'], { quiet: true });
-
-    log(`deploying ${bold(envName)} ${dim(`(--env ${wranglerEnv})`)}`);
-    try {
-      wrangler(['deploy', '--env', wranglerEnv], state.childEnv);
-    } catch (error) {
-      fail(`Deploy failed for ${envName}.`);
-      process.exit(error.status ?? 1);
-    }
+  log(`deploying companion Worker ${bold(RESOURCES.production.jobs)} ${dim('(cron + queue consumer)')}`);
+  try {
+    wrangler(['deploy', '-c', 'wrangler.worker.jsonc'], state.childEnv);
+    created('cron triggers and the webhook queue consumer are live');
+  } catch (error) {
+    fail('The companion Worker failed to deploy.');
+    detail('The site itself is live, but invoices will not expire and failed webhook');
+    detail('deliveries will not be retried until this is fixed.');
+    process.exit(error.status ?? 1);
   }
 }
 
@@ -930,7 +1016,7 @@ async function phaseAdmin(state) {
     detail('ADMIN would be the highest-value target in the system. Run:');
     log('');
     detail('  STEVE_PAY_ADMIN_MOBILE=09xxxxxxxxx STEVE_PAY_ADMIN_PASSWORD=... \\');
-    detail('    npm run admin:create -- --remote --env production');
+    detail('    npm run admin:create -- --remote');
     log('');
     return;
   }
@@ -940,7 +1026,7 @@ async function phaseAdmin(state) {
     return;
   }
 
-  const args = ['scripts/create-admin.mjs', '--remote', '--env', 'production', '--yes', '--name', 'Administrator'];
+  const args = ['scripts/create-admin.mjs', '--remote', '--yes', '--name', 'Administrator'];
   try {
     runChild('node', args, {
       env: { ...state.childEnv, STEVE_PAY_ADMIN_MOBILE: mobile, STEVE_PAY_ADMIN_PASSWORD: password },
@@ -1006,7 +1092,10 @@ async function main() {
     forceConfig: args.forceConfig,
     turnstileSiteKey: args.turnstileSiteKey,
     suppliedSecrets: readSecretsFile(args.secrets),
-    environments: args.env === 'both' ? ['production', 'staging'] : [args.env],
+    // One environment. `parseArgs` refuses anything else, so this is a list of one to keep
+    // the `for (const envName of state.environments)` loops honest rather than a vestige.
+    environments: [args.env],
+    pagesUrl: null,
     // Both wrangler and the REST client authenticate from the environment, so a child
     // process can never pick up a *different* token than the one verified above.
     childEnv: { CLOUDFLARE_API_TOKEN: token },
@@ -1021,8 +1110,7 @@ async function main() {
     d1: phaseD1,
     kv: phaseKv,
     queues: phaseQueues,
-    subdomain: phaseSubdomain,
-    domain: phaseDomain,
+    pages: phasePages,
     config: phaseConfig,
     migrate: phaseMigrate,
     secrets: phaseSecrets,
@@ -1073,19 +1161,23 @@ async function main() {
   if (state.kv) {
     for (const [envName, id] of Object.entries(state.kv)) row(`kv ${envName}`, id);
   }
-  if (state.subdomain) {
-    row('staging url', `https://${RESOURCES.staging.worker}.${state.subdomain}.workers.dev`);
-  }
+  row('pages project', RESOURCES.production.project);
+  row('companion', RESOURCES.production.jobs);
+  if (state.pagesUrl) row('url', state.pagesUrl);
 
   console.log(`\n${bold('Next')}`);
-  log(`1. Commit the wrangler.jsonc change: ${dim('git add wrangler.jsonc && git commit')}`);
-  log('2. Check the deployment health probe: /health should return {"status":"ok"}');
-  log('3. Sign in at /login?scope=admin and approve the first merchant');
+  log(`1. Check the deployment health probe: ${state.pagesUrl ?? ''}/health should return {"status":"ok"}`);
+  log('2. Open the site and confirm the pages render — that address is the origin every link uses');
+  log('3. Attach your custom domain in the dashboard when you have one: Workers & Pages → your');
+  detail('   Pages project → Custom domains. Nothing in the project needs to change; the next');
+  detail('   request is served on the new host and every generated link follows it.');
+  log(`4. Commit the config changes: ${dim('git add wrangler.jsonc wrangler.worker.jsonc && git commit')}`);
+  log('5. Sign in at /login?scope=admin and approve the first merchant');
   if (!state.turnstileSiteKey) {
-    log(`4. Turnstile is switched off until a site key is set: ${dim('--turnstile-site-key <key>')} plus the secret`);
+    log(`6. Turnstile is switched off until a site key is set: ${dim('--turnstile-site-key <key>')} plus the secret`);
   }
   if (!process.env.TELEGRAM_BOT_TOKEN) {
-    log(`${state.turnstileSiteKey ? '5' : '4'}. Telegram is off until TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_CHAT_ID are set,`);
+    log(`${state.turnstileSiteKey ? '7' : '5'}. Telegram is off until TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_CHAT_ID are set,`);
     detail('   then register the webhook with the Telegram API — the script does not call Telegram.');
   }
   console.log('');

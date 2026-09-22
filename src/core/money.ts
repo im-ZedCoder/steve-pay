@@ -219,6 +219,87 @@ export function formatRialWithUnitFa(rial: Rial | number): string {
   return `${formatRialFa(rial)} ریال`;
 }
 
+// ---------------------------------------------------------------------------
+// The amount in words
+// ---------------------------------------------------------------------------
+
+const WORDS_ONES = ['', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت', 'هشت', 'نه'];
+const WORDS_TEENS = [
+  'ده',
+  'یازده',
+  'دوازده',
+  'سیزده',
+  'چهارده',
+  'پانزده',
+  'شانزده',
+  'هفده',
+  'هجده',
+  'نوزده',
+];
+const WORDS_TENS = ['', '', 'بیست', 'سی', 'چهل', 'پنجاه', 'شصت', 'هفتاد', 'هشتاد', 'نود'];
+const WORDS_HUNDREDS = [
+  '',
+  'صد',
+  'دویست',
+  'سیصد',
+  'چهارصد',
+  'پانصد',
+  'ششصد',
+  'هفتصد',
+  'هشتصد',
+  'نهصد',
+];
+const WORDS_SCALES = ['', ' هزار', ' میلیون', ' میلیارد', ' هزار میلیارد'];
+
+/** One group of three digits. Persian joins the parts with " و ", never a comma. */
+function underThousandToWords(value: number): string {
+  const parts: string[] = [];
+  const hundreds = Math.floor(value / 100);
+  const rest = value % 100;
+  if (hundreds > 0) parts.push(WORDS_HUNDREDS[hundreds] ?? '');
+  if (rest >= 10 && rest < 20) {
+    parts.push(WORDS_TEENS[rest - 10] ?? '');
+  } else {
+    const tens = Math.floor(rest / 10);
+    const ones = rest % 10;
+    if (tens > 0) parts.push(WORDS_TENS[tens] ?? '');
+    if (ones > 0) parts.push(WORDS_ONES[ones] ?? '');
+  }
+  return parts.join(' و ');
+}
+
+/**
+ * The amount written out in Persian, for the payment page.
+ *
+ * A reading aid, never a source of truth: the digits above it are the payable amount and
+ * the thing the customer actually transfers. It is here because both realistic failures on
+ * this page are digit errors — dropping a zero, or reading ۳۲۴٬۵۵۵ as ۳۲۴٬۵۵۰ — and a second
+ * rendering of the same number catches both. Persian bank slips are written this way for the
+ * same reason.
+ *
+ * Returns an empty string for anything it cannot state in words, so the page omits the line
+ * rather than printing something wrong: zero and negatives have no useful wording here, and
+ * past 10^15 the scale table runs out.
+ */
+export function tomanInWords(toman: Toman): string {
+  if (!Number.isSafeInteger(toman) || toman <= 0) return '';
+
+  const groups: string[] = [];
+  let remaining = toman;
+  let scale = 0;
+  while (remaining > 0) {
+    const chunk = remaining % 1000;
+    if (chunk > 0) {
+      const scaleWord = WORDS_SCALES[scale];
+      if (scaleWord === undefined) return '';
+      groups.unshift(`${underThousandToWords(chunk)}${scaleWord}`);
+    }
+    remaining = Math.floor(remaining / 1000);
+    scale += 1;
+  }
+  return groups.join(' و ');
+}
+
 /**
  * How many invoices a wallet balance still covers, for the low-balance warning.
  * Computed from the live fee so the message never claims three when the fee has

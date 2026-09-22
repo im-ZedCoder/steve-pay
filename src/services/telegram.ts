@@ -20,6 +20,7 @@ import { AppError } from '../core/errors';
 import { nowIso, formatJalaliDateTime } from '../core/time';
 import { formatTomanFa, estimatedInvoiceCapacity, type Toman } from '../core/money';
 import { toPersianDigits } from '../core/digits';
+import { absoluteUrl } from '../core/origin';
 import { NotificationService } from './notifications';
 import type { Logger } from '../obs/logger';
 
@@ -34,6 +35,21 @@ export interface TelegramSendResult {
   ok: boolean;
   skipped?: boolean;
   error?: string;
+}
+
+/**
+ * True for a URL Telegram will accept as an inline button target.
+ *
+ * Checked rather than assumed because the origin is learned at runtime: an empty one
+ * produces a path, and Telegram answers a path with a 400 that discards the message.
+ */
+function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
 export class TelegramService {
@@ -65,7 +81,10 @@ export class TelegramService {
         disable_web_page_preview: true,
       };
       if (options.markdown !== false) body['parse_mode'] = 'HTML';
-      if (options.buttonUrl && options.buttonLabel) {
+      // Telegram rejects the whole message — text and all — when an inline button's URL
+      // is not absolute (`BUTTON_URL_INVALID`). A job that ran before any request recorded
+      // the origin therefore has to drop the button rather than lose the notification.
+      if (options.buttonUrl && options.buttonLabel && isAbsoluteHttpUrl(options.buttonUrl)) {
         body['reply_markup'] = {
           inline_keyboard: [[{ text: options.buttonLabel, url: options.buttonUrl }]],
         };
@@ -97,14 +116,14 @@ export class TelegramService {
   }
 
   /** Registers the webhook so /telegram/webhook receives updates. */
-  async registerWebhook(baseUrl: string): Promise<TelegramSendResult> {
+  async registerWebhook(origin: string): Promise<TelegramSendResult> {
     if (!this.available || !this.config.botToken) return { ok: false, skipped: true };
     try {
       const response = await fetch(`https://api.telegram.org/bot${this.config.botToken}/setWebhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          url: `${baseUrl}/telegram/webhook`,
+          url: absoluteUrl(origin, '/telegram/webhook'),
           secret_token: this.config.webhookSecret ?? undefined,
           allowed_updates: ['message', 'callback_query'],
           drop_pending_updates: false,
@@ -138,7 +157,7 @@ export class TelegramService {
     void merchantUserId;
   }
 
-  async notifyAccountApproved(chatId: string, merchantCode: string, baseUrl: string): Promise<TelegramSendResult> {
+  async notifyAccountApproved(chatId: string, merchantCode: string, origin: string): Promise<TelegramSendResult> {
     return this.send(
       chatId,
       [
@@ -149,7 +168,7 @@ export class TelegramService {
         'کلید API ساخته شد. برای مشاهده آن وارد پنل شوید.',
         'برای پردازش خودکار، فورواردر پیامک را در صفحه «راه‌اندازی» تنظیم کنید.',
       ].join('\n'),
-      { buttonUrl: `${baseUrl}/dashboard/setup`, buttonLabel: 'تکمیل راه‌اندازی' },
+      { buttonUrl: absoluteUrl(origin, '/dashboard/setup'), buttonLabel: 'تکمیل راه‌اندازی' },
     );
   }
 
@@ -267,7 +286,7 @@ export class TelegramService {
     invoiceId: string;
     reference: string | null;
     confirmedAt: string;
-    baseUrl: string;
+    origin: string;
     automatic: boolean;
   }): Promise<TelegramSendResult> {
     return this.send(
@@ -285,7 +304,7 @@ export class TelegramService {
       ]
         .filter((line) => line !== null)
         .join('\n'),
-      { buttonUrl: `${input.baseUrl}/dashboard/invoices`, buttonLabel: 'مشاهده فاکتورها' },
+      { buttonUrl: absoluteUrl(input.origin, '/dashboard/invoices'), buttonLabel: 'مشاهده فاکتورها' },
     );
   }
 
@@ -295,7 +314,7 @@ export class TelegramService {
     payableAmount: Toman;
     invoiceId: string;
     reasons: string[];
-    baseUrl: string;
+    origin: string;
   }): Promise<TelegramSendResult> {
     return this.send(
       input.chatId,
@@ -310,7 +329,7 @@ export class TelegramService {
         '',
         'پرداخت تا بررسی شما تأیید نشده است.',
       ].join('\n'),
-      { buttonUrl: `${input.baseUrl}/dashboard/payments`, buttonLabel: 'بررسی پرداخت‌ها' },
+      { buttonUrl: absoluteUrl(input.origin, '/dashboard/payments'), buttonLabel: 'بررسی پرداخت‌ها' },
     );
   }
 
@@ -319,7 +338,7 @@ export class TelegramService {
     chatId: string;
     url: string;
     failures: number;
-    baseUrl: string;
+    origin: string;
   }): Promise<TelegramSendResult> {
     return this.send(
       input.chatId,
@@ -331,7 +350,7 @@ export class TelegramService {
         '',
         'پس از رفع مشکل، وب‌هوک را دوباره فعال کنید.',
       ].join('\n'),
-      { buttonUrl: `${input.baseUrl}/dashboard/webhooks`, buttonLabel: 'تنظیمات وب‌هوک' },
+      { buttonUrl: absoluteUrl(input.origin, '/dashboard/webhooks'), buttonLabel: 'تنظیمات وب‌هوک' },
     );
   }
 
@@ -339,7 +358,7 @@ export class TelegramService {
     chatId: string;
     ticketNumber: number;
     subject: string;
-    baseUrl: string;
+    origin: string;
     fromAdmin: boolean;
   }): Promise<TelegramSendResult> {
     return this.send(
@@ -350,7 +369,7 @@ export class TelegramService {
         `تیکت ${toPersianDigits(`#${input.ticketNumber}`)}: ${escapeHtml(input.subject)}`,
         input.fromAdmin ? 'پشتیبانی پاسخ داده است.' : 'پذیرنده پاسخ داده است.',
       ].join('\n'),
-      { buttonUrl: `${input.baseUrl}/dashboard/tickets`, buttonLabel: 'مشاهده تیکت' },
+      { buttonUrl: absoluteUrl(input.origin, '/dashboard/tickets'), buttonLabel: 'مشاهده تیکت' },
     );
   }
 

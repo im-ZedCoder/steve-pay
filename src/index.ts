@@ -14,10 +14,11 @@
  */
 
 import { AppError, isAppError } from './core/errors';
-import { apiFailure, html } from './core/http';
+import { apiFailure, html, HSTS_VALUE } from './core/http';
 import { requestId as newRequestId } from './core/ids';
 import { createLogger } from './obs/logger';
 import { resolveConfig, type Env, type WebhookQueueMessage } from './env';
+import { isSecureRequest } from './core/origin';
 import { createApp, runtimeContext } from './app';
 import { serverErrorPage } from './ui/pages/errors';
 import { handleWebhookBatch } from './queue/handler';
@@ -69,6 +70,10 @@ export default {
 
       const publicMessage =
         isAppError(error) && error.public ? error.message : 'خطای غیرمنتظره در سرور رخ داد.';
+      // This path builds a response without going through the app's middleware, so it is the
+      // one place that has to decide HSTS for itself — and the same rule applies: only when
+      // the request arrived over TLS, and only in production.
+      const hsts = config.isProduction && isSecureRequest(request);
       return html(
         serverErrorPage({
           title: publicMessage,
@@ -76,7 +81,11 @@ export default {
           status: isAppError(error) ? error.status : 500,
           requestId,
         }),
-        { status: isAppError(error) ? error.status : 500, noStore: true },
+        {
+          status: isAppError(error) ? error.status : 500,
+          noStore: true,
+          ...(hsts ? { headers: { 'strict-transport-security': HSTS_VALUE } } : {}),
+        },
       );
     }
   },

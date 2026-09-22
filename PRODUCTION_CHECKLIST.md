@@ -17,14 +17,18 @@ like — a checklist whose items cannot fail is not a checklist.
 
 ## 2. Infrastructure
 
-- [ ] Production D1 created; its ID pasted into `wrangler.jsonc` (top level **and** `env.production`)
-- [ ] Staging D1 created; separate database, never the production one
-- [ ] KV namespace created and bound
+- [ ] Production D1 created; its ID written into **both** `wrangler.jsonc` and
+      `wrangler.worker.jsonc` — one database, two readers, and they must name the same one
+- [ ] KV namespace created and bound in both files too
 - [ ] `steve-pay-webhooks` and `steve-pay-webhooks-dlq` queues created
-- [ ] No `REPLACE_WITH_*` placeholder remains anywhere in `wrangler.jsonc`
+- [ ] `wrangler.jsonc` declares the queue **producer** and `wrangler.worker.jsonc` the
+      **consumer**. A producer with no consumer is a queue that grows
+- [ ] No `REPLACE_WITH_*` placeholder remains in either config
+- [ ] The Pages project exists and the companion Worker is deployed
 
 ```bash
-grep -n 'REPLACE_WITH' wrangler.jsonc   # must print nothing
+grep -n 'REPLACE_WITH' wrangler.jsonc wrangler.worker.jsonc   # must print nothing
+npx wrangler pages project list
 ```
 
 ## 3. Secrets
@@ -56,7 +60,7 @@ Rotating these later is destructive: `API_KEY_PEPPER` invalidates every issued A
 
 ## 5. Admin access
 
-- [ ] `npm run admin:create -- --remote --env production` created exactly one `SUPER_ADMIN`
+- [ ] `npm run admin:create -- --remote` created exactly one `SUPER_ADMIN`
 - [ ] That admin has logged in at `/login?scope=admin` and changed the bootstrap password
 - [ ] No other `ADMIN`/`SUPER_ADMIN` row exists that nobody recognises
 
@@ -92,17 +96,28 @@ Review each of these against your business decisions rather than accepting the d
 
 ## 7. Domain and TLS
 
-- [ ] `steve-pay.ir` resolves and the certificate is issued
-- [ ] `www.steve-pay.ir` resolves or deliberately redirects
-- [ ] `workers_dev` is `false` in production, so the `*.workers.dev` hostname does not serve the
-      platform
-- [ ] HSTS is being sent with `preload`
+The project ships with no hostname configured, so the first deployment is already live on its
+`<project>.pages.dev` address and every link it generates points there. A custom domain is a
+dashboard step, not a code change — nothing needs redeploying when you attach one.
+
+- [ ] The `*.pages.dev` address serves the platform and `/health` answers
+- [ ] The custom domain is attached in the dashboard (Workers & Pages → your project → Custom
+      domains) and the certificate is issued
+- [ ] The `www` host resolves, or is set to redirect to the apex
+- [ ] Every generated link follows the host it is served on: open a payment page on both hosts and
+      compare the invoice URL in the status response
+- [ ] Old hostnames do not keep serving the platform — remove the previous custom domain if this
+      is a move, or set an origin rule to redirect it
+- [ ] HSTS is being sent with `preload` on the production host. It is sent only when the
+      deployment is production **and** the request arrived over HTTPS, so a plain-HTTP host sends
+      nothing — check the header on the HTTPS host, not on `localhost`
 - [ ] Enabling the preload list is a real commitment — do it only when every subdomain you will ever
       need is HTTPS
 
 ```bash
-curl -sI https://steve-pay.ir/ | grep -iE 'strict-transport|content-security|x-frame'
-curl -s https://steve-pay.ir/health
+HOST=https://your-domain.example   # or the *.pages.dev address
+curl -sI "$HOST/" | grep -iE 'strict-transport|content-security|x-frame'
+curl -s "$HOST/health"
 ```
 
 - [ ] `/health` returns `200` with `"status":"ok"` and `database.status: "ok"`
@@ -142,11 +157,12 @@ Then the negative paths:
 
 ## 9. Observability
 
-- [ ] Workers Logs enabled and readable
+- [ ] Observability enabled in both configs, and both log streams are readable. They are two
+      deployments, so there are two tails: the site's Functions and the companion Worker
 
 ```bash
-npx wrangler tail --env production --format pretty
-npx wrangler tail --env production --format json | grep '"surface":"cron"'
+npx wrangler pages deployment tail --project-name steve-pay --format pretty
+npx wrangler tail -c wrangler.worker.jsonc --format json | grep '"surface":"cron"'
 ```
 
 - [ ] Cron firing: the 2-minute expiry job and the 15-minute retry job both visible in the tail
@@ -171,7 +187,10 @@ npx wrangler tail --env production --format json | grep '"surface":"cron"'
 
 ## 11. Operations readiness
 
-- [ ] You know how to roll back: `wrangler rollback <id> --env production`
+- [ ] You know how to roll back each half. The site rolls back in the dashboard (Workers & Pages
+      → your project → Deployments → Rollback), or by re-running `npm run deploy` from the last
+      good commit; the companion Worker rolls back with
+      `npx wrangler rollback <id> -c wrangler.worker.jsonc`
 - [ ] You know that rollback reverts code and **not** data, and that migrations must therefore be
       backward compatible for one release
 - [ ] Support has the escalation path: `requestId` → logs → audit log

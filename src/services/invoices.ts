@@ -33,6 +33,7 @@ import {
 } from '../core/state-machine';
 import { all, first, run, scalar, isUniqueViolation } from '../db/client';
 import { validateCallbackUrl, sanitizeText } from '../core/validation';
+import { absoluteUrl } from '../core/origin';
 import { SettingsService } from './settings';
 import { AuditService } from './audit';
 import { WalletService } from './wallet';
@@ -131,7 +132,10 @@ export class InvoiceService {
   private readonly audit: AuditService;
   private readonly wallet: WalletService;
   private readonly cards: CardService;
-  private readonly baseUrl: string;
+  /** Scheme and host of the request being served. See `core/origin.ts`. */
+  private readonly origin: string;
+  /** Whether that request arrived over TLS, which decides if callbacks must be HTTPS. */
+  private readonly secure: boolean;
 
   constructor(deps: {
     db: D1Database;
@@ -139,14 +143,16 @@ export class InvoiceService {
     audit: AuditService;
     wallet: WalletService;
     cards: CardService;
-    baseUrl: string;
+    origin: string;
+    secure: boolean;
   }) {
     this.db = deps.db;
     this.settings = deps.settings;
     this.audit = deps.audit;
     this.wallet = deps.wallet;
     this.cards = deps.cards;
-    this.baseUrl = deps.baseUrl.replace(/\/+$/, '');
+    this.origin = deps.origin;
+    this.secure = deps.secure;
   }
 
   // -------------------------------------------------------------------------
@@ -186,7 +192,7 @@ export class InvoiceService {
     const expiryMinutes = await this.resolveExpiryMinutes(context.merchantUserId, input.expiresInMinutes);
     const customCallback = await this.resolveCallback(input.customCallback, context.merchantUserId);
     const returnUrl = input.returnUrl
-      ? validateCallbackUrl(input.returnUrl, { allowInsecure: !this.isProduction() })
+      ? validateCallbackUrl(input.returnUrl, { allowInsecure: !this.secure })
       : null;
 
     const reserveAmount = requiredWalletReserve(feeMode, breakdown.gatewayFee);
@@ -433,7 +439,7 @@ export class InvoiceService {
     if (requested) {
       const allowed = await this.settings.bool('callbacks.allow_custom_urls');
       if (!allowed) throw new AppError('CALLBACK_URL_NOT_ALLOWED', { details: { reason: 'DISABLED_BY_PLATFORM' } });
-      return validateCallbackUrl(requested, { allowInsecure: !this.isProduction() });
+      return validateCallbackUrl(requested, { allowInsecure: !this.secure });
     }
 
     const endpoint = await first<{ url: string }>(
@@ -444,10 +450,6 @@ export class InvoiceService {
       [merchantUserId],
     );
     return endpoint?.url ?? null;
-  }
-
-  private isProduction(): boolean {
-    return this.baseUrl.startsWith('https://');
   }
 
   toApiView(input: {
@@ -481,7 +483,7 @@ export class InvoiceService {
       feeMode: input.feeMode,
       description: input.description,
       metadata: input.metadata,
-      paymentUrl: `${this.baseUrl}/pay/${input.invoiceId}`,
+      paymentUrl: absoluteUrl(this.origin, `/pay/${input.invoiceId}`),
       expiresAt: input.expiresAt,
       createdAt: input.createdAt,
       environment: input.environment,

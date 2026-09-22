@@ -18,17 +18,21 @@ import { createLogger } from '../obs/logger';
 import { AuditService } from '../services/audit';
 import { SettingsService } from '../services/settings';
 import { WebhookService } from '../services/webhooks';
-import { resolveConfig, resolveSecrets, type Env, type WebhookQueueMessage } from '../env';
+import { resolveSecrets, type Env, type WebhookQueueMessage } from '../env';
+import { resolveOrigin } from '../core/origin';
 
 export async function handleWebhookBatch(
   batch: MessageBatch<WebhookQueueMessage>,
   env: Env,
   logger = createLogger({ base: { surface: 'queue' } }),
 ): Promise<void> {
-  const config = resolveConfig(env);
   const secrets = resolveSecrets(env);
   const audit = new AuditService(env.DB);
   const settings = new SettingsService(env.DB);
+
+  // A consumer has no request, so it uses the origin a request recorded. Only the
+  // delivery `user-agent` needs it; delivery itself is unaffected when it is unknown.
+  const origin = await resolveOrigin(env);
 
   const webhooks = new WebhookService({
     db: env.DB,
@@ -38,7 +42,9 @@ export async function handleWebhookBatch(
     // The consumer must not re-enqueue; it delivers.
     queue: null,
     logger,
-    baseUrl: config.baseUrl,
+    origin,
+    // Endpoint creation never happens here, so no callback is validated against this.
+    secure: origin.length > 0 && origin.startsWith('https://'),
   });
 
   for (const message of batch.messages) {

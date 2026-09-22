@@ -58,8 +58,21 @@ export function contentSecurityPolicy(options: { turnstile?: boolean } = {}): st
 /** The default policy: no third-party origins and no inline script. */
 export const CONTENT_SECURITY_POLICY = contentSecurityPolicy();
 
+/**
+ * Two years, with preload.
+ *
+ * Exported so the two call sites that decide whether to send it — the app's header middleware
+ * and the Worker's outermost error handler — cannot drift apart on the value.
+ */
+export const HSTS_VALUE = 'max-age=63072000; includeSubDomains; preload';
+
 export interface SecurityHeaderOptions {
-  /** Two years, with preload. Only sent on HTTPS deployments. */
+  /**
+   * Send `Strict-Transport-Security`.
+   *
+   * Only set from a call site that knows the request arrived over TLS and that the
+   * deployment is a real one. See the note in `securityHeaders`.
+   */
   hsts?: boolean;
   /** Payment and auth pages must never be cached by a shared cache. */
   noStore?: boolean;
@@ -76,8 +89,16 @@ export function securityHeaders(options: SecurityHeaderOptions = {}): Record<str
     'permissions-policy': 'geolocation=(), camera=(), microphone=(), payment=()',
     'cross-origin-opener-policy': 'same-origin',
   };
-  if (options.hsts !== false) {
-    headers['strict-transport-security'] = 'max-age=63072000; includeSubDomains; preload';
+  // Off unless asked for.
+  //
+  // These helpers build a response and do not know what connection it will travel over, so
+  // the safe default is to send nothing — a browser ignores HSTS on plain HTTP, and an
+  // HSTS header seen on a localhost or preview origin is actively harmful, because the
+  // browser then refuses plain-HTTP requests to that host for two years. The middleware in
+  // `app.ts` is the one place that can see the request, and it is the one place that turns
+  // this on.
+  if (options.hsts === true) {
+    headers['strict-transport-security'] = HSTS_VALUE;
   }
   if (options.noStore) {
     headers['cache-control'] = 'no-store, no-cache, must-revalidate, private';

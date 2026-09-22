@@ -23,6 +23,7 @@
 
 import type { Env, RuntimeConfig, ResolvedSecrets } from '../env';
 import { resolveSecrets } from '../env';
+import { isSecureRequest, originOf } from '../core/origin';
 import type { Logger } from '../obs/logger';
 import { SettingsService, settingsFor } from '../services/settings';
 import { AuditService, auditFor } from '../services/audit';
@@ -84,6 +85,13 @@ export function servicesFor(context: ServiceContext): Services {
   if (cached) return cached;
 
   const { env, logger, requestId, config } = context;
+  // Derived from the request rather than passed in. The request is already here, so
+  // there is no reason to make every caller carry the origin, and no way for one to
+  // carry a different one than the host it is actually serving: a service that built
+  // links for the wrong host would be a bug with no visible symptom until a customer
+  // clicked a payment link and landed somewhere that does not resolve.
+  const origin = originOf(context.request);
+  const secure = isSecureRequest(context.request);
   const db = env.DB;
   const secrets = resolveSecrets(env);
 
@@ -111,7 +119,8 @@ export function servicesFor(context: ServiceContext): Services {
     audit,
     wallet,
     cards,
-    baseUrl: config.baseUrl,
+    origin,
+    secure,
   });
 
   const services: Services = {
@@ -134,8 +143,10 @@ export function servicesFor(context: ServiceContext): Services {
       settings,
       queue: env.WEBHOOK_QUEUE ?? null,
       logger,
-      // Used to build the `paymentUrl` embedded in delivery payloads.
-      baseUrl: config.baseUrl,
+      // Used for the `user-agent` contact URL and to decide whether a merchant
+      // endpoint must be HTTPS.
+      origin,
+      secure,
     }),
     notifications,
     telegram,

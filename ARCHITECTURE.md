@@ -299,6 +299,19 @@ confirmation. When the queue binding is absent (local development), delivery fal
 **Cron for the things that decay.** Invoice expiry every 2 minutes, webhook retries every 15,
 daily reconciliation and cleanup.
 
+**Two deployments, because Pages Functions are HTTP-only.** The application is a Pages project;
+a Function has no `scheduled()` handler and cannot be a queue consumer, and this platform needs
+both. So the cron triggers and the queue consumer live in a companion Worker
+(`wrangler.worker.jsonc`) that binds the same D1 database and KV namespace — one dataset, two
+readers, and no second object graph, because it runs the same entry point. The Worker has
+`workers_dev: false` and no route, so it has no public address at all.
+
+**The hostname is not configuration.** There is no `routes` block, no `custom_domain` and no base
+URL variable anywhere. Each request's own origin is read from its URL and used for every absolute
+link the platform generates, with the last-seen origin remembered in KV for the background work
+that has no request to read from. That is why the same build answers on `localhost`, on
+`*.pages.dev`, on a preview alias and on a custom domain attached later, with nothing to edit.
+
 **Compatibility date.** Pinned to the newest date the bundled workerd supports. A date ahead of the
 installed runtime makes `wrangler dev` and the Vitest Workers pool refuse to boot, which would mean
 the test suite could not run against the same runtime configuration production uses.

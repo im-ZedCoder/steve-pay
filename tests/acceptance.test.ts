@@ -137,13 +137,16 @@ describe('Steve Pay end-to-end flow (§78)', () => {
     const registerCookies = cookiesOf(registerForm);
     expect(registerCookies).toContain('sp_csrf=');
     const registerHtml = await registerForm.text();
-    // The registration form has nothing interactive on it, so it must not load the
-    // client script at all — and above all it must not inline one, because the CSP is
+    // The form's one interactive affordance is the password reveal, so the page loads the
+    // client script — and above all it must not inline one, because the CSP is
     // `script-src 'self'` and an inline block would be blocked by the browser with no
-    // server-side symptom. Turnstile is switched off in this environment, so the page
-    // should carry no script tag whatsoever.
-    expect(registerHtml).not.toContain('<script');
-    expect(registerHtml).not.toContain('/assets/client.js');
+    // server-side symptom. Every script tag on the page must therefore be external;
+    // Turnstile is switched off in this environment, so the client script is the only one.
+    expect(registerHtml).toContain('/assets/client.js');
+    expect(registerHtml).not.toMatch(/<script(?![^>]*\ssrc=)/);
+    // ...and what it loads has to be wired to a field that exists.
+    expect(registerHtml).toContain('data-pw-toggle="f_password"');
+    expect(registerHtml).toContain('id="f_password"');
 
     const registerBody = new URLSearchParams({
       _csrf: csrfFrom(registerHtml),
@@ -496,5 +499,49 @@ describe('Steve Pay end-to-end flow (§78)', () => {
     const body = (await response.json()) as { status: string; checks: { database: { status: string } } };
     expect(body.status).toBe('ok');
     expect(body.checks.database.status).toBe('ok');
+  });
+});
+
+/**
+ * Cookie attributes follow the connection, not the environment name (§40, §59).
+ *
+ * This is a regression test for a login that could not work. The session cookie was marked
+ * `Secure` whenever `ENVIRONMENT` said `production`, whatever scheme the request arrived on.
+ * A `Secure` cookie sent over plain HTTP is not an error anywhere: the browser discards it
+ * silently. The password was accepted, the server answered `303 /dashboard`, and the next
+ * request arrived with no session — so the merchant saw the login page again, with nothing in
+ * the logs and no message on the page.
+ *
+ * Both directions are asserted, because the failure mode of "just stop sending Secure" is a
+ * session cookie that travels in the clear on the deployment that needs the flag most.
+ */
+describe('session cookie security attributes (§40, §59)', () => {
+  it('marks the cookie Secure when the request arrived over TLS', async () => {
+    const response = await SELF.fetch('https://steve-pay.test/login');
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.length).toBeGreaterThan(0);
+    for (const cookie of cookies) {
+      expect(cookie).toContain('Secure');
+      expect(cookie).toContain('SameSite=Lax');
+    }
+  });
+
+  it('omits Secure on a plain-HTTP request, so the cookie is actually stored', async () => {
+    const response = await SELF.fetch('http://steve-pay.test/login');
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.length).toBeGreaterThan(0);
+    for (const cookie of cookies) {
+      expect(cookie).not.toContain('Secure');
+    }
+    // The CSRF cookie must stay readable by script: the dashboard's fetch() flows send it in
+    // a header, and a HttpOnly CSRF cookie would break every one of them.
+    const csrf = cookies.find((cookie) => cookie.startsWith('sp_csrf='));
+    expect(csrf).toBeDefined();
+    expect(csrf).not.toContain('HttpOnly');
+  });
+
+  it('does not send HSTS over plain HTTP, where a browser would ignore it anyway', async () => {
+    const insecure = await SELF.fetch('http://steve-pay.test/health');
+    expect(insecure.headers.get('strict-transport-security')).toBeNull();
   });
 });

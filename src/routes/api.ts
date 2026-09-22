@@ -17,6 +17,7 @@ import { servicesFor, type Services } from './container';
 import { apiSuccess, json, rateLimited } from '../core/http';
 import { AppError } from '../core/errors';
 import { sha256Hex } from '../core/crypto';
+import { absoluteUrl } from '../core/origin';
 import { startOfTehranDay, endOfTehranDay, tehranDayKeyOffset } from '../core/time';
 import { apiRule, makePaymentRule } from '../services/ratelimit';
 import { announceConfirmedPayment } from '../services/payment-events';
@@ -335,7 +336,7 @@ export function registerApiRoutes(app: Hono<AppEnv>): void {
         sms: {
           pipelineConnected: smsPipeline.connected,
           verifiedAt: smsPipeline.verifiedAt,
-          webhookUrl: `${context.config.baseUrl}/sms`,
+          webhookUrl: absoluteUrl(context.origin, '/sms'),
         },
         webhooks: {
           configured: endpoints.length > 0,

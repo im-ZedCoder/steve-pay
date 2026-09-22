@@ -38,6 +38,8 @@ import {
 } from '../core/state-machine';
 import { AppError, isAppError } from '../core/errors';
 import { CSRF_FIELD } from '../core/csrf';
+import { absoluteUrl } from '../core/origin';
+import { bankCardFace } from '../ui/bank-card';
 import { first } from '../db/client';
 import {
   csrfForGet,
@@ -599,7 +601,7 @@ async function paymentDetailPage(c: RouteContext): Promise<Response> {
       ]);
 
       const payable = isPayable(invoice.status);
-      const paymentUrl = `${c.get('appContext').config.baseUrl}/pay/${invoice.id}`;
+      const paymentUrl = absoluteUrl(c.get('appContext').origin, `/pay/${invoice.id}`);
 
       const spine = pipelineSpine({
         invoice: true,
@@ -877,15 +879,30 @@ async function cardsPage(c: RouteContext, notice?: PageInput['notice']): Promise
           : `<div class="stack">${cards
               .map((card) => {
                 const idAttr = escapeHtml(card.id);
+                // The card is drawn in the colours of the bank that issued it, derived from
+                // the number's prefix. Printed masked, the way the panel has always shown
+                // it; the theme is a fact about the issuer and does not depend on how much
+                // of the number is on screen.
+                const face = bankCardFace({
+                  number: card.number,
+                  display: card.masked,
+                  bankName: card.bankName,
+                  title: card.title,
+                  holderName: card.holderName,
+                  size: 'sm',
+                  footer: `<button class="btn btn-sm" type="button" data-copy="${escapeHtml(
+                    card.masked,
+                  )}">کپی شماره</button>`,
+                });
+
                 return `<div class="panel">
 <div class="panel-head">
-  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
-    <span class="mono" style="font-size:.95rem;letter-spacing:.08em">${escapeHtml(card.masked)}</span>
+  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;min-width:0">
+    <span class="mono" style="font-size:.9rem">${escapeHtml(card.bankName ?? 'کارت بانکی')}</span>
     ${card.isDefault ? badge('ACTIVE', 'پیش‌فرض') : ''}
     ${card.isActive ? '' : badge('SUSPENDED', 'غیرفعال')}
   </div>
   <div style="display:flex;gap:.4rem;flex-wrap:wrap">
-    <button class="btn" type="button" data-copy="${escapeHtml(card.masked)}">کپی شماره</button>
     ${
       card.isDefault
         ? ''
@@ -898,10 +915,11 @@ async function cardsPage(c: RouteContext, notice?: PageInput['notice']): Promise
 <button class="btn" type="submit">حذف</button></form>
   </div>
 </div>
+<div class="card-slot card-slot-sm">${face}</div>
 <dl class="receipt-rows">
 ${row('عنوان', escapeHtml(card.title))}
-${row('بانک', escapeHtml(card.bankName ?? 'نامشخص'))}
 ${row('صاحب حساب', escapeHtml(card.holderName ?? '—'))}
+${row('واریزهای موفق', toPersianDigits(String(card.successCount)))}
 </dl>
 <form method="post" action="/dashboard/cards/${idAttr}/update" class="form" style="margin-top:.9rem">
   ${csrf}
@@ -1367,7 +1385,7 @@ async function smsPage(
         test: countsRaw['test'] ?? 0,
       };
 
-      const webhookUrl = `${c.get('appContext').config.baseUrl}/sms`;
+      const webhookUrl = absoluteUrl(c.get('appContext').origin, '/sms');
 
       const tokenBlock = token
         ? `<div class="panel" style="margin-bottom:1rem;border-color:rgba(143,187,255,.4)">
@@ -2156,10 +2174,7 @@ export function registerDashboardRoutes(app: Hono<AppEnv>): void {
   app.post('/dashboard/sms/test-token', async (c) => {
     const session = await requireMerchant(c);
     await readForm(c);
-    const token = await session.services.sms.issueTestToken(
-      session.user.id,
-      c.get('appContext').config.baseUrl,
-    );
+    const token = await session.services.sms.issueTestToken(session.user.id);
     return smsPage(c, null, token);
   });
 

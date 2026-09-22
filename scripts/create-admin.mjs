@@ -14,7 +14,7 @@
  * Usage:
  *   npm run admin:create                       # local D1, interactive
  *   npm run admin:create -- --mobile 0912... --role ADMIN
- *   npm run admin:create -- --remote --env production
+ *   npm run admin:create -- --remote
  *
  * For non-interactive use (CI, scripted bootstrap) pass STEVE_PAY_ADMIN_MOBILE and
  * STEVE_PAY_ADMIN_PASSWORD instead of being prompted. Passing a password on the command
@@ -35,12 +35,21 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const { hashPassword } = await import(pathToFileURL(join(ROOT, 'src', 'core', 'crypto.ts')).href);
 const { id: newId } = await import(pathToFileURL(join(ROOT, 'src', 'core', 'ids.ts')).href);
 
+/**
+ * The database to write to.
+ *
+ * There is one, and there is no `--env` flag. Wrangler environments were how a single
+ * Worker config could describe two deployments; the application is a Pages project with a
+ * single bindings block now, so `wrangler d1 execute --env production` names an environment
+ * that does not exist in the config and fails before it touches the database. Adding a
+ * second database back would mean adding a second environment back here as well — which is
+ * the point at which a `--env` flag becomes worth having again.
+ */
 const ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUPPORT', 'FINANCE', 'VIEWER'];
 const DATABASE = 'steve-pay';
-const DATABASE_STAGING = 'steve-pay-staging';
 
 function parseArgs(argv) {
-  const args = { remote: false, env: null, mobile: null, password: null, role: 'SUPER_ADMIN', name: null, yes: false };
+  const args = { remote: false, mobile: null, password: null, role: 'SUPER_ADMIN', name: null, yes: false };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     switch (token) {
@@ -53,9 +62,6 @@ function parseArgs(argv) {
       case '--yes':
       case '-y':
         args.yes = true;
-        break;
-      case '--env':
-        args.env = argv[++index] ?? null;
         break;
       case '--mobile':
         args.mobile = argv[++index] ?? null;
@@ -97,7 +103,6 @@ Options:
   --role <ROLE>              ${ROLES.join(' | ')} (default SUPER_ADMIN)
   --name <text>              Display name
   --remote                   Target the remote database instead of local
-  --env <name>               Wrangler environment (e.g. production)
   --yes, -y                  Skip the confirmation prompt
   -h, --help                 This message
 
@@ -203,8 +208,8 @@ async function main() {
     }
   }
 
-  const database = args.env === 'staging' ? DATABASE_STAGING : DATABASE;
-  const target = args.remote ? `remote (${args.env ?? 'default'})` : 'local';
+  const database = DATABASE;
+  const target = args.remote ? 'remote' : 'local';
 
   console.log('');
   console.log(`  database : ${database} [${target}]`);
@@ -259,7 +264,6 @@ VALUES (
   try {
     const wranglerArgs = ['wrangler', 'd1', 'execute', database, '--file', sqlPath];
     wranglerArgs.push(args.remote ? '--remote' : '--local');
-    if (args.env) wranglerArgs.push('--env', args.env);
 
     const result = spawnSync('npx', wranglerArgs, { stdio: 'inherit', shell: process.platform === 'win32' });
 

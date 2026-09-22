@@ -95,6 +95,7 @@ export function registerSmsRoutes(app: Hono<AppEnv>): void {
       sourceIp: context.clientIp,
       requestId: context.requestId,
       environment: auth.environment,
+      origin: context.origin,
     });
 
     // Telling the merchant about a confirmed payment is deliberately outside the
@@ -109,7 +110,7 @@ export function registerSmsRoutes(app: Hono<AppEnv>): void {
           webhooks: services.webhooks,
           telegram: services.telegram,
           logger: context.logger,
-          baseUrl: context.config.baseUrl,
+          origin: context.origin,
           invoice,
           transactionId: result.transactionId,
           automatic: true,
@@ -189,9 +190,9 @@ async function readSmsBody(c: RouteContext): Promise<SmsBody> {
   }
 
   const body = parsed as Record<string, unknown>;
-  const message = body['message'];
+  const message = firstString(body, ['message', 'msg', 'text', 'body', 'sms']);
 
-  if (typeof message !== 'string') {
+  if (message === null) {
     throw new AppError('SMS_INVALID_PAYLOAD', {
       message: 'فیلد message الزامی است و باید متن پیامک باشد.',
       details: { field: 'message' },
@@ -207,12 +208,33 @@ async function readSmsBody(c: RouteContext): Promise<SmsBody> {
   // The claimed timestamp is stored but never trusted for matching: it is the
   // forwarder's clock, and a phone with a wrong clock would otherwise be able to place a
   // payment inside the matching window. The service compares against server time.
-  const receivedAt = typeof body['receivedAt'] === 'string' ? body['receivedAt'] : null;
+  const receivedAt = firstString(body, ['receivedAt', 'time', 'timestamp', 'date']);
 
   return {
     message,
-    sender: typeof body['sender'] === 'string' ? body['sender'].slice(0, 64) : null,
-    deviceId: typeof body['deviceId'] === 'string' ? body['deviceId'].slice(0, 128) : null,
+    sender: firstString(body, ['sender', 'from', 'in-number', 'inNumber', 'number', 'address'])?.slice(0, 64) ?? null,
+    // `filter-name` is the identifier an SMS Forwarder user names themselves, which is
+    // why the setup guide tells them to name the filter after the phone: it is the only
+    // field in that payload that can distinguish one handset from another.
+    deviceId: firstString(body, ['deviceId', 'filter-name', 'filterName', 'device', 'device_id'])?.slice(0, 128) ?? null,
     receivedAt: receivedAt && !Number.isNaN(Date.parse(receivedAt)) ? receivedAt : null,
   };
+}
+
+/**
+ * The first non-empty string among a set of accepted field names.
+ *
+ * The endpoint is configured by hand in a phone app whose field names we do not control,
+ * and every Android SMS forwarder names the message field differently — `message`, `msg`,
+ * `text`, `body`. Reading only one spelling is how a guide ends up documenting a body the
+ * server rejects, with a `SMS_INVALID_PAYLOAD` that says "field message is required" while
+ * the user is looking at a field called `msg`. Aliases are cheap here and the field is
+ * unambiguous in every payload that has one.
+ */
+function firstString(body: Record<string, unknown>, names: readonly string[]): string | null {
+  for (const name of names) {
+    const value = body[name];
+    if (typeof value === 'string' && value.trim().length > 0) return value;
+  }
+  return null;
 }

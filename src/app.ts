@@ -19,6 +19,7 @@ import { createLogger, type Logger } from './obs/logger';
 import { apiFailure, html, json, securityHeaders } from './core/http';
 import { AppError, isAppError } from './core/errors';
 import { requestId as newRequestId } from './core/ids';
+import { isSecureRequest, originOf, rememberOrigin } from './core/origin';
 import { serverErrorPage } from './ui/pages/errors';
 
 /**
@@ -60,6 +61,22 @@ export interface AppContext {
   logger: Logger;
   config: RuntimeConfig;
   clientIp: string | null;
+  /**
+   * Scheme and host the visitor actually used, e.g. `https://pay.example.com`.
+   *
+   * This is the only place an absolute URL comes from. Nothing is configured, so a
+   * deployment answers correctly on its first request — before anyone has set a
+   * hostname, or if the hostname later changes.
+   */
+  origin: string;
+  /**
+   * True when this request arrived over TLS.
+   *
+   * Separate from `config.isProduction` because it answers a different question, and
+   * the two disagree in exactly the case that breaks login: a deployment labelled
+   * production but reached over plain HTTP.
+   */
+  secure: boolean;
 }
 
 export interface Variables {
@@ -88,15 +105,18 @@ function isMachineRoute(pathname: string): boolean {
 }
 
 /**
- * Every non-production response omits HSTS.
+ * `Strict-Transport-Security` is sent only over TLS, and only in production.
  *
- * `Strict-Transport-Security` on a `localhost` or `*.workers.dev` origin is not merely
- * useless, it is harmful: a browser that has seen it refuses plain-HTTP requests to that
+ * Two independent reasons, and both have to hold. On plain HTTP the header is ignored
+ * by browsers, so sending it is noise. And an HSTS header seen on a `localhost` or
+ * preview origin is actively harmful: the browser refuses plain-HTTP requests to that
  * host for two years, which breaks local development in a way that is very hard to
- * diagnose. `securityHeaders` defaults it on, so it is switched off explicitly here.
+ * diagnose — so a development deployment never sends it even when it is reached over
+ * HTTPS. `securityHeaders` never sends it on its own; it is switched on explicitly here,
+ * from the two facts this middleware is the only one able to see.
  */
-function hstsFor(config: RuntimeConfig): boolean {
-  return config.isProduction;
+function hstsFor(context: { config: RuntimeConfig; secure: boolean }): boolean {
+  return context.config.isProduction && context.secure;
 }
 
 /**
@@ -114,6 +134,10 @@ export function createApp(appContext?: Partial<AppContext>): Hono<AppEnv> {
       const runtime = runtimeContext.get(c.req.raw);
       const requestId =
         runtime?.requestId ?? existing.requestId ?? c.req.header('x-request-id') ?? newRequestId();
+      // Read from the request rather than taken from an injected partial context:
+      // these two are properties of the connection, and one derived from anything but
+      // the connection is a value that looks right and is wrong.
+      const origin = originOf(c.req.raw);
       c.set('appContext', {
         request: c.req.raw,
         env: c.env,
@@ -125,8 +149,16 @@ export function createApp(appContext?: Partial<AppContext>): Hono<AppEnv> {
         logger: runtime?.logger ?? existing.logger ?? createLogger({ base: { requestId } }),
         config: runtime?.config ?? existing.config ?? resolveConfig(c.env),
         clientIp: clientIp(c.req.raw),
+        origin,
+        secure: isSecureRequest(c.req.raw),
       });
     }
+
+    // Record the host for the jobs that run without a request. Deliberately before
+    // `next()` and not awaited: the KV write is bookkeeping for a background sweep,
+    // and the page must not pay a round trip for it.
+    if (c.env.CACHE) rememberOrigin(c.env.CACHE, c.get('appContext').origin);
+
     await next();
   });
 
@@ -138,7 +170,7 @@ export function createApp(appContext?: Partial<AppContext>): Hono<AppEnv> {
     if (!(response instanceof Response)) return;
     const headers = new Headers(response.headers);
     const context = c.get('appContext');
-    for (const [key, value] of Object.entries(securityHeaders({ hsts: hstsFor(context.config) }))) {
+    for (const [key, value] of Object.entries(securityHeaders({ hsts: hstsFor(context) }))) {
       if (!headers.has(key)) headers.set(key, value);
     }
     if (!headers.has('x-request-id')) headers.set('x-request-id', context.requestId);

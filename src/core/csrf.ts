@@ -26,12 +26,16 @@ import { CSRF_COOKIE_NAME, parseCookies, serializeCookie } from './cookies';
 export const CSRF_FIELD = '_csrf';
 
 /**
- * Hashes the token before it goes in the cookie.
+ * Issues the token that goes in the form and the cookie that carries its hash.
  *
  * The cookie holds `sha256(token)` and the form holds the token, so the value that
  * travels in the URL-encoded body is not the value stored in a header. This keeps the
  * raw token out of any log line that records headers, and the comparison is still a
  * constant-time hash comparison.
+ *
+ * @param secure Whether the request that is receiving this cookie arrived over TLS.
+ *   Pass the connection's scheme, never the environment name — a `Secure` cookie the
+ *   browser refuses to store turns every form on the site into a CSRF rejection.
  */
 export async function issueCsrf(secure: boolean): Promise<{ token: string; cookie: string }> {
   const token = randomToken(32);

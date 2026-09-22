@@ -53,7 +53,15 @@ const N = span('n');
 const C = span('c');
 const P = span('p');
 
-const CURL = `${K('curl')} -X POST ${S('https://steve-pay.ir/api/v1/payments')} \\
+/**
+ * The samples on this page show the host the reader is on.
+ *
+ * They are functions of the origin rather than constants because the platform has no
+ * configured base URL: the deployment answers on a `*.pages.dev` name, a preview alias
+ * and a custom domain, and a sample that names one of them would be wrong on the other
+ * two. It also means a reader can copy an example and run it as-is.
+ */
+const CURL = (origin: string) => `${K('curl')} -X POST ${S(`${origin}/api/v1/payments`)} \\
   -H ${S('"X-API-Key: sk_live_<key-id><secret>"')} \\
   -H ${S('"Idempotency-Key: order-1234"')} \\
   -H ${S('"Content-Type: application/json"')} \\
@@ -64,13 +72,13 @@ const CURL = `${K('curl')} -X POST ${S('https://steve-pay.ir/api/v1/payments')} 
     ${P('"metadata"')}: { ${P('"orderId"')}: ${P('"1234"')} }
   ${P("}'")}`;
 
-const RESPONSE = `{
+const RESPONSE = (origin: string) => `{
   ${P('"success"')}: ${N('true')},
   ${P('"invoiceId"')}: ${P('"inv_01J8XK4M2Q"')},
   ${P('"amount"')}: ${N(PAYABLE)},          ${C('// تومان — مبلغ دقیق پرداخت')}
   ${P('"amountRial"')}: ${N(toRial(PAYABLE))},    ${C('// ریال')}
   ${P('"uniqueSuffix"')}: ${N(EXAMPLE.suffix)},
-  ${P('"paymentUrl"')}: ${P('"https://steve-pay.ir/pay/inv_01J8XK4M2Q"')},
+  ${P('"paymentUrl"')}: ${P(`"${origin}/pay/inv_01J8XK4M2Q"`)},
   ${P('"status"')}: ${P('"pending"')},
   ${P('"expiresAt"')}: ${P('"2026-09-22T09:41:07.000Z"')}
 }`;
@@ -91,8 +99,8 @@ ${P('X-StevePay-Delivery')}: ${S('whd_01J8XK9Q7A')}
   ${P('"paidAt"')}: ${P('"2026-09-22T09:38:52.000Z"')}
 }`;
 
-export function landingPage(input: { baseUrl: string }): string {
-  void input;
+export function landingPage(input: { origin: string }): string {
+  const { origin } = input;
 
   const hero = `<section class="hero">
 <div class="grid-field" aria-hidden="true"></div>
@@ -182,8 +190,8 @@ ${bandHead({
   lede: 'مبلغ یکتا در پاسخ برمی‌گردد چون خودش بخشی از نتیجه است: همان عددی است که باید در تلفن بانک ببینید. وبهوک هم امضا دارد تا مطمئن شوید از طرف ما آمده.',
 })}
 <div class="split">
-  ${codeBlock({ label: 'REQUEST', note: 'makePayment', html: CURL })}
-  ${codeBlock({ label: 'RESPONSE', note: '200 OK', html: RESPONSE })}
+  ${codeBlock({ label: 'REQUEST', note: 'makePayment', html: CURL(origin) })}
+  ${codeBlock({ label: 'RESPONSE', note: '200 OK', html: RESPONSE(origin) })}
 </div>
 <div class="split" style="margin-top:1.25rem">
   ${codeBlock({ label: 'WEBHOOK', note: 'به سرور شما', html: WEBHOOK })}
@@ -264,6 +272,7 @@ ${factGrid([
         'درگاه پرداخت کارتی با مبلغ یکتا، تطبیق خودکار پیامک بانک، کیف پول و دفتر کل، و وبهوک امضاشده با HMAC.',
       currentPath: '/',
       script: true,
+      origin,
     },
     `${hero}${pipeline}${api}${why}${cta}`,
   );

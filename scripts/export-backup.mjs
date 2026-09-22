@@ -17,7 +17,7 @@
  *
  * Usage:
  *   npm run backup:export
- *   npm run backup:export -- --remote --env production
+ *   npm run backup:export -- --remote
  *   npm run backup:export -- --out ./backups --merchant usr_01J8...
  *
  * Output: <out>/steve-pay-<timestamp>.json, plus a <same>.sums.txt reconciliation report.
@@ -60,8 +60,17 @@ const FORBIDDEN_COLUMNS = [
 
 const REDACT = 'REDACTED';
 
+/**
+ * The D1 database this platform uses.
+ *
+ * One name, hard-coded, because there is one database: the application is a Pages project
+ * with a single bindings block, so there is no wrangler environment to select between a
+ * production and a staging copy. See the note in `scripts/create-admin.mjs`.
+ */
+const DATABASE = 'steve-pay';
+
 function parseArgs(argv) {
-  const args = { remote: false, env: null, out: join(ROOT, 'backups'), merchant: null, limit: 100_000 };
+  const args = { remote: false, out: join(ROOT, 'backups'), merchant: null, limit: 100_000 };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     switch (token) {
@@ -70,9 +79,6 @@ function parseArgs(argv) {
         break;
       case '--local':
         args.remote = false;
-        break;
-      case '--env':
-        args.env = argv[++index] ?? null;
         break;
       case '--out':
         args.out = argv[++index] ?? args.out;
@@ -94,7 +100,6 @@ Options:
   --out <dir>          Output directory (default ./backups)
   --merchant <id>      Export one merchant only
   --remote             Read the remote database instead of local
-  --env <name>         Wrangler environment (e.g. production)
   --limit <n>          Row cap per table (default 100000)
   -h, --help           This message
 
@@ -120,10 +125,9 @@ Never exported   : users, sessions, api_keys, webhook_endpoints, login_attempts
  * only stdout is parsed and a non-zero exit is reported rather than being mistaken for an
  * empty result set.
  */
-function query(database, sql, { remote, env }) {
+function query(database, sql, { remote }) {
   const wranglerArgs = ['wrangler', 'd1', 'execute', database, '--json', '--command', sql];
   wranglerArgs.push(remote ? '--remote' : '--local');
-  if (env) wranglerArgs.push('--env', env);
 
   const result = spawnSync('npx', wranglerArgs, {
     encoding: 'utf8',
@@ -171,12 +175,12 @@ function sanitise(table, rows) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const database = args.env === 'staging' ? 'steve-pay-staging' : 'steve-pay';
-  const connection = { remote: args.remote, env: args.env };
+  const database = DATABASE;
+  const connection = { remote: args.remote };
 
   mkdirSync(args.out, { recursive: true });
 
-  console.log(`Exporting from ${database} [${args.remote ? `remote (${args.env ?? 'default'})` : 'local'}]`);
+  console.log(`Exporting from ${database} [${args.remote ? 'remote' : 'local'}]`);
   console.log('');
 
   const exported = {};

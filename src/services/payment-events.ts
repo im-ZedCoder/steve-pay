@@ -28,7 +28,8 @@ export interface AnnounceInput {
   webhooks: WebhookService;
   telegram: TelegramService;
   logger: Logger;
-  baseUrl: string;
+  /** Scheme and host of the request that confirmed the payment, for links in messages. */
+  origin: string;
   invoice: InvoiceRow;
   transactionId: string | null;
   /** False when an admin confirmed by hand; the merchant's message says so. */
@@ -152,7 +153,7 @@ export async function announceConfirmedPayment(input: AnnounceInput): Promise<An
           invoiceId: invoice.id,
           reference: transaction?.bank_reference ?? null,
           confirmedAt: paidAt,
-          baseUrl: input.baseUrl,
+          origin: input.origin,
           automatic: input.automatic,
         });
         telegramSent = result.ok;

@@ -19,6 +19,7 @@ import {
   addToman,
   subtractToman,
   isSafeToman,
+  tomanInWords,
 } from '../src/core/money';
 import { computeFees, requiredWalletReserve, isFeeMode } from '../src/core/fees';
 import {
@@ -51,6 +52,7 @@ import {
   statusBucket,
 } from '../src/core/state-machine';
 import { gregorianToJalali, jalaliToGregorian, isJalaliLeapYear } from '../src/core/jalali';
+import { bankNameFor, bankThemeFor, isKnownBank, UNKNOWN_BANK_THEME } from '../src/core/banks';
 
 // ---------------------------------------------------------------------------
 
@@ -253,6 +255,59 @@ describe('card validation (§9)', () => {
   });
 });
 
+/**
+ * The issuer themes are cosmetic, but the lookup that selects them is a longest-match search
+ * over a table of BINs, and a longest-match search that depends on the order of its input is
+ * a bug that waits for the next person to add a bank to the end of the list.
+ */
+describe('bank issuer themes', () => {
+  it('prefers the longer prefix when two overlap', () => {
+    // 502910 is Karafarin and 502908 is Tose'e Ta'avon. A five-digit comparison would
+    // resolve 5029xx against whichever of the two happened to be checked first.
+    expect(bankNameFor('5029101234567890')).toBe('بانک کارآفرین');
+    expect(bankNameFor("5029081234567890")).toBe('بانک توسعه تعاون');
+  });
+
+  it('resolves a card from its digits alone, whatever they are dressed in', () => {
+    expect(bankNameFor('6104337890123456')).toBe('بانک ملت');
+    expect(bankNameFor('6104 3378 9012 3456')).toBe('بانک ملت');
+    expect(bankNameFor('6104-3378-9012-3456')).toBe('بانک ملت');
+    // Persian digits, which is what a merchant pasting from a bank app produces.
+    expect(bankNameFor('۶۱۰۴۳۳۷۸۹۰۱۲۳۴۵۶')).toBe('بانک ملت');
+  });
+
+  it('cannot identify an issuer from a masked number, and does not pretend to', () => {
+    // Masking keeps the first four digits and the last four; the BIN is six. So this is a
+    // real limit of the input, not a gap in the table — which is why the panel passes the
+    // full number for the theme and the masked form only for what is printed.
+    expect(bankNameFor('6104-****-****-0000')).toBe(UNKNOWN_BANK_THEME.name);
+    // Not clipped digits, though: four digits of a real number must not match a BIN.
+    expect(isKnownBank('61040000')).toBe(false);
+  });
+
+  it('never guesses an issuer it cannot identify', () => {
+    // A prefix nobody claims renders as a plain card rather than as some other bank's colours.
+    expect(isKnownBank('9999991234567890')).toBe(false);
+    expect(isKnownBank('6104337890123456')).toBe(true);
+    // Fewer than six digits is not a BIN yet.
+    expect(isKnownBank('610')).toBe(false);
+    expect(bankThemeFor('').name).toBe(UNKNOWN_BANK_THEME.name);
+  });
+
+  it('gives every card a complete theme', () => {
+    // A missing colour would render as an invisible name on an invisible card, so the theme
+    // is asserted to be whole rather than merely present.
+    for (const number of ['6104337890123456', '6037991234567890', '9999991234567890']) {
+      const theme = bankThemeFor(number);
+      expect(theme.name.length).toBeGreaterThan(0);
+      expect(theme.gradient).toContain('linear-gradient');
+      expect(theme.brand).toMatch(/^(#[0-9a-f]{3,8}|rgba?\()/i);
+      expect(theme.mark.length).toBeGreaterThan(0);
+      expect(theme.mark.length).toBeLessThanOrEqual(3);
+    }
+  });
+});
+
 describe('invoice state machine (§13)', () => {
   it('allows the legitimate forward transitions', () => {
     expect(canTransition('CREATED', 'PENDING')).toBe(true);
@@ -348,5 +403,45 @@ describe('Jalali calendar (§17)', () => {
     expect(isJalaliLeapYear(1407)).toBe(false);
     expect(isJalaliLeapYear(1408)).toBe(true);
     expect(isJalaliLeapYear(1412)).toBe(true);
+  });
+});
+
+/**
+ * The amount in words, shown under the figure on the payment page.
+ *
+ * It is a second rendering of a number a customer is about to transfer, so a wrong word is
+ * a wrong amount read out loud. Every case below is one the page can actually render.
+ */
+describe('amount in words', () => {
+  it('says each place correctly', () => {
+    expect(tomanInWords(1)).toBe('یک');
+    expect(tomanInWords(9)).toBe('نه');
+    expect(tomanInWords(10)).toBe('ده');
+    expect(tomanInWords(15)).toBe('پانزده');
+    expect(tomanInWords(19)).toBe('نوزده');
+    expect(tomanInWords(20)).toBe('بیست');
+    expect(tomanInWords(21)).toBe('بیست و یک');
+    expect(tomanInWords(100)).toBe('صد');
+    expect(tomanInWords(101)).toBe('صد و یک');
+    expect(tomanInWords(999)).toBe('نهصد و نود و نه');
+  });
+
+  it('joins the scales with the Persian conjunction', () => {
+    expect(tomanInWords(1000)).toBe('یک هزار');
+    expect(tomanInWords(1001)).toBe('یک هزار و یک');
+    expect(tomanInWords(1500)).toBe('یک هزار و پانصد');
+    expect(tomanInWords(1_000_000)).toBe('یک میلیون');
+    // The exact shape the payment page renders for a real invoice.
+    expect(tomanInWords(324_555)).toBe('سیصد و بیست و چهار هزار و پانصد و پنجاه و پنج');
+    expect(tomanInWords(3_655_450)).toBe('سه میلیون و ششصد و پنجاه و پنج هزار و چهارصد و پنجاه');
+  });
+
+  it('returns nothing rather than something wrong', () => {
+    // Zero and negatives have no useful wording here, and the page omits the line.
+    expect(tomanInWords(0)).toBe('');
+    expect(tomanInWords(-1)).toBe('');
+    // Past the scale table the only honest answer is silence.
+    expect(tomanInWords(10 ** 16)).toBe('');
+    expect(tomanInWords(1.5)).toBe('');
   });
 });

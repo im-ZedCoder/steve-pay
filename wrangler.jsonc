@@ -1,9 +1,26 @@
 {
-  // Steve Pay — Cloudflare Worker deployment configuration.
-  // Production runs on the custom domain steve-pay.ir (see routes / custom_domain below).
+  // Steve Pay — Cloudflare **Pages** project configuration.
+  //
+  // This file describes the web application. The three background surfaces that Pages
+  // Functions cannot run — the cron sweeper and the webhook queue consumer — live in
+  // `wrangler.worker.jsonc` as a companion Worker. Both bind the same D1 database and KV
+  // namespace, so there is one set of data and two things reading it.
+  //
+  // THERE IS NO HOST IN HERE.
+  //
+  // There is no `routes` block, no `custom_domain`, and no base URL variable. The origin
+  // is read from each incoming request (see `src/core/origin.ts`), which means the same
+  // build answers correctly on `<project>.pages.dev`, on every preview alias, and on
+  // whatever custom domain is attached later — with no configuration and nothing to keep
+  // in sync. Attach the domain in the Cloudflare dashboard (Pages → your project →
+  // Custom domains); this file does not need editing when you do.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "steve-pay",
-  "main": "src/index.ts",
+
+  // Deployment mode: this is a Pages project, not a Worker. `npm run build` assembles
+  // this directory; `wrangler pages deploy` uploads it.
+  "pages_build_output_dir": "dist-pages",
+
   // Pinned to the newest date the bundled workerd binary supports. A date ahead of the
   // installed runtime makes `wrangler dev` and the Vitest Workers pool refuse to boot
   // ("newest date supported by this server binary is ..."), which would mean the test
@@ -11,19 +28,6 @@
   // when the toolchain is upgraded, not the other way around.
   "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat_v2"],
-  "workers_dev": false,
-  "minify": true,
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1,
-  },
-
-  // The dashboard, payment pages and API are all server-rendered by this Worker.
-  // `public/` only holds immutable bytes: CSS and self-hosted fonts.
-  "assets": {
-    "directory": "public",
-    "binding": "ASSETS",
-  },
 
   "d1_databases": [
     {
@@ -37,90 +41,25 @@
   "kv_namespaces": [
     {
       // Only used for caches that tolerate eventual consistency (settings, public invoice
-      // snapshots, negative caches). All correctness-critical counters live in D1.
+      // snapshots, negative caches) and for the remembered platform origin. All
+      // correctness-critical counters live in D1.
       "binding": "CACHE",
       "id": "0a952c56526d403b90281ccbe8a1ace6",
     },
   ],
 
+  // A **producer** only. Pages Functions cannot host a queue consumer, which is why the
+  // companion Worker in `wrangler.worker.jsonc` owns the consumer and the retry schedule.
   "queues": {
     "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
-    "consumers": [
-      {
-        "queue": "steve-pay-webhooks",
-        "max_batch_size": 10,
-        "max_batch_timeout": 5,
-        "max_retries": 3,
-        "max_concurrency": 4,
-        "dead_letter_queue": "steve-pay-webhooks-dlq",
-      },
-    ],
-  },
-
-  "triggers": {
-    "crons": [
-      "*/2 * * * *",
-      "*/15 * * * *",
-      "0 3 * * *",
-    ],
   },
 
   "vars": {
-    "ENVIRONMENT": "development",
-    "BASE_URL": "https://steve-pay.ir",
+    "ENVIRONMENT": "production",
     "GATEWAY_FEE_TOMAN": "3000",
     "UNIQUE_SUFFIX_DIGITS": "4",
-    // Turnstile site key is public and safe to ship to the browser.
+    // Turnstile site key is public and safe to ship to the browser. Empty disables the
+    // widget; the operator turns enforcement on from the settings table.
     "TURNSTILE_SITE_KEY": "",
-  },
-
-  "env": {
-    "staging": {
-      "name": "steve-pay-staging",
-      "workers_dev": true,
-      "vars": {
-        "ENVIRONMENT": "staging",
-        "BASE_URL": "https://steve-pay-staging.xodeomid.workers.dev",
-        "GATEWAY_FEE_TOMAN": "3000",
-        "UNIQUE_SUFFIX_DIGITS": "4",
-        "TURNSTILE_SITE_KEY": "",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "steve-pay-staging",
-          "database_id": "REPLACE_WITH_STAGING_D1_ID",
-          "migrations_dir": "migrations",
-        },
-      ],
-      "kv_namespaces": [
-        { "binding": "CACHE", "id": "REPLACE_WITH_STAGING_KV_ID" },
-      ],
-    },
-    "production": {
-      "name": "steve-pay",
-      "routes": [
-        { "pattern": "steve-pay.ir", "custom_domain": true },
-        { "pattern": "www.steve-pay.ir", "custom_domain": true },
-      ],
-      "vars": {
-        "ENVIRONMENT": "production",
-        "BASE_URL": "https://steve-pay.ir",
-        "GATEWAY_FEE_TOMAN": "3000",
-        "UNIQUE_SUFFIX_DIGITS": "4",
-        "TURNSTILE_SITE_KEY": "",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "steve-pay",
-          "database_id": "98a5bae2-430f-4a9f-a1b4-2fab51179761",
-          "migrations_dir": "migrations",
-        },
-      ],
-      "kv_namespaces": [
-        { "binding": "CACHE", "id": "0a952c56526d403b90281ccbe8a1ace6" },
-      ],
-    },
   },
 }

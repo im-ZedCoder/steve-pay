@@ -26,9 +26,13 @@ export default defineConfig(async () => {
   return {
     plugins: [
       cloudflareTest({
-        // Load the real wrangler config, so the tests get the same bindings, the same
-        // compatibility date and the same compatibility flags as a deployment.
-        wrangler: { configPath: './wrangler.jsonc' },
+        // The **companion Worker** config, not the Pages one. Workerd needs a `main` to
+        // build an entrypoint, and the Pages config deliberately has none — its entry point
+        // is assembled into `dist-pages/_worker.js` at build time. The companion config
+        // names the same `src/index.ts` and declares the same D1 and KV bindings, so the
+        // tests still run against a deployment-shaped runtime with the real bindings, the
+        // real compatibility date and the real compatibility flags.
+        wrangler: { configPath: './wrangler.worker.jsonc' },
         // One worker and no storage isolation keeps the migration setup paid once and lets
         // several tests observe the same database, which the concurrency tests rely on.
         singleWorker: true,
@@ -43,7 +47,10 @@ export default defineConfig(async () => {
             API_KEY_PEPPER: 'test-api-key-pepper-value-0123456789',
             WEBHOOK_SECRET: 'test-webhook-secret-value-0123456789',
             ENVIRONMENT: 'development',
-            BASE_URL: 'https://steve-pay.test',
+            // No BASE_URL. There is no such variable any more: the platform reads its own
+            // origin from each request, so the tests get it from the request URLs they
+            // build (`https://steve-pay.test/...`) exactly as a deployment gets it from the
+            // host the visitor used.
             GATEWAY_FEE_TOMAN: '3000',
             UNIQUE_SUFFIX_DIGITS: '4',
           },

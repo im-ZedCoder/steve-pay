@@ -10,7 +10,7 @@
  *
  *   - it finds existing resources instead of creating duplicates (so a second run is safe)
  *   - it creates what is missing, and only that
- *   - the `wrangler.jsonc` patch replaces the right placeholders with the right ids
+ *   - it replaces the right placeholders with the right ids, in **both** config files
  *   - a dry run changes nothing at all
  *   - it refuses to write secrets or a config it was not asked to write
  *
@@ -22,9 +22,17 @@
  * account cannot give — and a real account cannot be reset between assertions.
  *
  * The mock answers with the exact response shapes the Cloudflare OpenAPI spec declares
- * (`uuid`/`name` for D1, `id`/`title` for KV, `queue_name` for Queues, `subdomain` for the
- * Workers subdomain). Those were verified against the spec, so this is a test of the
+ * (`uuid`/`name` for D1, `id`/`title` for KV, `queue_name` for Queues, `name`/`subdomain`
+ * for a Pages project). Those were verified against the spec, so this is a test of the
  * script's logic and not of a shape someone invented here.
+ *
+ * BOTH CONFIG FILES ARE PATCHED, SO BOTH ARE ASSERTED
+ *
+ * The web application is a Pages project and the cron/queue surfaces are a companion Worker;
+ * they are configured separately but must point at the same database. A patch that updated
+ * one file and not the other deploys two halves of one system against two different
+ * databases, and nothing about that is visible until a cron job reports on data no customer
+ * wrote.
  */
 
 import { createServer } from 'node:http';
@@ -69,12 +77,13 @@ function section(name) {
 function createMockApi() {
   const state = {
     mutations: [],
-    created: { d1: [], kv: [], queues: [] },
+    created: { d1: [], kv: [], queues: [], pages: [] },
     // Pre-seeded to exercise the "already exists" path on the first run.
     existing: {
       d1: [{ uuid: 'd1-existing-prod', name: 'steve-pay' }],
       kv: [{ id: 'kv-existing-prod', title: 'steve-pay-cache' }],
       queues: ['steve-pay-webhooks-dlq'],
+      pages: [],
     },
   };
 
@@ -99,16 +108,15 @@ function createMockApi() {
         return send({ result: [{ id: 'acct-test', name: 'Test Account' }] });
       }
 
-      if (path === '/accounts/acct-test/workers/scripts/steve-pay') {
-        return send({ result: null }, 404);
+      if (path === '/accounts/acct-test/pages/projects' && method === 'GET') {
+        return send({ result: [...state.existing.pages, ...state.created.pages] });
       }
-
-      if (path === '/accounts/acct-test/workers/subdomain') {
-        return send({ result: { subdomain: 'test-subdomain' } });
-      }
-
-      if (path === '/zones') {
-        return send({ result: [{ id: 'zone-test', name: 'steve-pay.ir', status: 'active' }] });
+      if (path === '/accounts/acct-test/pages/projects' && method === 'POST') {
+        const { name } = JSON.parse(body);
+        state.mutations.push(`pages:${name}`);
+        const record = { name, subdomain: `${name}.pages.dev` };
+        state.created.pages.push(record);
+        return send({ result: record });
       }
 
       if (path === '/accounts/acct-test/d1/database' && method === 'GET') {
@@ -169,33 +177,61 @@ function createMockApi() {
  * replace and eight assertions failed — a test that breaks precisely when the thing it tests
  * has been used successfully.
  *
- * The fixture is therefore a canonical file with the placeholders where the script expects
- * them: two production ids (top level and `env.production`, which must both end up pointing at
- * the same database) and one of each staging id. That makes the result independent of the
- * developer's Cloudflare account, which is the only way this test can mean the same thing on
- * every machine.
+ * The fixture is therefore two canonical files with the placeholders where the script expects
+ * them. There is one id pair per file — the Pages config and the companion Worker config —
+ * and both must end up pointing at the same database. That makes the result independent of
+ * the developer's Cloudflare account, which is the only way this test can mean the same thing
+ * on every machine.
+ *
+ * There is deliberately no `env` block and no `routes` block: the project has one
+ * environment, and no hostname appears in either file.
  */
 const FIXTURE_CONFIG = `{
-  // Steve Pay — Cloudflare Worker deployment configuration.
+  // Steve Pay — Cloudflare Pages project configuration.
   // A comment the patch must not disturb: ids are replaced as text, not by re-serialising.
   "name": "steve-pay",
-  "main": "src/index.ts",
+  "pages_build_output_dir": "dist-pages",
   "compatibility_date": "2026-08-22",
-  "workers_dev": false,
-  "assets": { "directory": "public", "binding": "ASSETS" },
 
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "steve-pay",
-      "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+      "database_id": "REPLACE_WITH_D1_ID",
       "migrations_dir": "migrations",
     },
   ],
 
   "kv_namespaces": [
-    { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
+    { "binding": "CACHE", "id": "REPLACE_WITH_KV_ID" },
   ],
+
+  "queues": {
+    "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
+  },
+
+  "vars": { "ENVIRONMENT": "production", "TURNSTILE_SITE_KEY": "" },
+}
+`;
+
+/** The companion Worker: the same bindings, plus crons and the queue consumer. */
+const FIXTURE_WORKER_CONFIG = `{
+  // Steve Pay — companion Worker for cron and the webhook queue consumer.
+  "name": "steve-pay-jobs",
+  "main": "src/index.ts",
+  "workers_dev": false,
+  "compatibility_date": "2026-08-22",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "steve-pay",
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  "kv_namespaces": [{ "binding": "CACHE", "id": "REPLACE_WITH_KV_ID" }],
 
   "queues": {
     "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
@@ -207,47 +243,9 @@ const FIXTURE_CONFIG = `{
     ],
   },
 
-  "vars": { "ENVIRONMENT": "development", "TURNSTILE_SITE_KEY": "" },
+  "triggers": { "crons": ["*/2 * * * *"] },
 
-  "env": {
-    "staging": {
-      "name": "steve-pay-staging",
-      "workers_dev": true,
-      "vars": {
-        "ENVIRONMENT": "staging",
-        "BASE_URL": "https://steve-pay-staging.<your-subdomain>.workers.dev",
-        "TURNSTILE_SITE_KEY": "",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "steve-pay-staging",
-          "database_id": "REPLACE_WITH_STAGING_D1_ID",
-        },
-      ],
-      "kv_namespaces": [
-        { "binding": "CACHE", "id": "REPLACE_WITH_STAGING_KV_ID" },
-      ],
-    },
-    "production": {
-      "name": "steve-pay",
-      "routes": [
-        { "pattern": "steve-pay.ir", "custom_domain": true },
-        { "pattern": "www.steve-pay.ir", "custom_domain": true },
-      ],
-      "vars": { "ENVIRONMENT": "production" },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "steve-pay",
-          "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
-        },
-      ],
-      "kv_namespaces": [
-        { "binding": "CACHE", "id": "REPLACE_WITH_PRODUCTION_KV_ID" },
-      ],
-    },
-  },
+  "vars": { "ENVIRONMENT": "production", "TURNSTILE_SITE_KEY": "" },
 }
 `;
 
@@ -267,6 +265,7 @@ function makeFixture() {
     'utf8',
   );
   writeFileSync(join(directory, 'wrangler.jsonc'), FIXTURE_CONFIG, 'utf8');
+  writeFileSync(join(directory, 'wrangler.worker.jsonc'), FIXTURE_WORKER_CONFIG, 'utf8');
 
   // The fixture needs its own copy of the script, because the script derives its project
   // root from its own file location rather than from the working directory. Running the
@@ -335,13 +334,17 @@ async function main() {
 
   const directory = makeFixture();
   const configPath = join(directory, 'wrangler.jsonc');
+  const workerConfigPath = join(directory, 'wrangler.worker.jsonc');
   const configBefore = readFileSync(configPath, 'utf8');
+  const workerConfigBefore = readFileSync(workerConfigPath, 'utf8');
   const secretsBefore = existsSync(join(directory, '.cloudflare.secrets.production.json'));
 
   // Tripwire for the mistake described in `makeFixture`. If the fixture ever runs the
   // repository's copy of the script again, this fails loudly instead of leaving mock ids in
   // a real config file that someone might then commit.
   const realConfigBefore = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8');
+  const realWorkerConfigBefore = readFileSync(join(ROOT, 'wrangler.worker.jsonc'), 'utf8');
+  void realWorkerConfigBefore;
 
   // Read from the repository, not the fixture. A real `cf:setup` run legitimately leaves a
   // secrets file here, so the assertion has to be "this test added one", not "none exists".
@@ -352,23 +355,32 @@ async function main() {
     // -----------------------------------------------------------------------
     section('dry run changes nothing');
     // -----------------------------------------------------------------------
-    const dryRun = await runSetup(directory, apiBase, ['--env', 'both', '--dry-run']);
+    const dryRun = await runSetup(directory, apiBase, ['--env', 'production', '--dry-run']);
 
     check('exits 0', dryRun.status === 0, `status ${dryRun.status}\n${dryRun.output}`);
     check('reports the dry run plainly', dryRun.output.includes('dry run — nothing will be created'));
-    check('describes the deploy it would do', /would run: npm run fonts/.test(dryRun.output));
+    check('describes the build it would do', /would run: npm run build/.test(dryRun.output));
+    check(
+      'describes both deploy targets',
+      dryRun.output.includes('wrangler pages deploy') && dryRun.output.includes('wrangler deploy -c wrangler.worker.jsonc'),
+    );
     check('created no resources', mock.state.mutations.length === 0, mock.state.mutations.join(', '));
     check(
       'left wrangler.jsonc untouched',
       readFileSync(configPath, 'utf8') === configBefore,
       'the config file was modified during a dry run',
     );
+    check(
+      'left wrangler.worker.jsonc untouched',
+      readFileSync(workerConfigPath, 'utf8') === workerConfigBefore,
+      'the companion config was modified during a dry run',
+    );
     check('wrote no secrets file', !existsSync(join(directory, '.cloudflare.secrets.production.json')));
 
     // -----------------------------------------------------------------------
     section('first real run creates only what is missing');
     // -----------------------------------------------------------------------
-    const first = await runSetup(directory, apiBase, ['--env', 'both', '--skip', 'migrate,secrets,deploy,admin']);
+    const first = await runSetup(directory, apiBase, ['--env', 'production', '--skip', 'migrate,secrets,deploy,admin']);
 
     check('exits 0', first.status === 0, `status ${first.status}\n${first.output}`);
 
@@ -391,13 +403,10 @@ async function main() {
 
     // Missing in the mock: must be created.
     check('created the missing production queue', mock.state.mutations.includes('queue:steve-pay-webhooks'));
-    check('created the staging D1 database', mock.state.mutations.includes('d1:steve-pay-staging'));
-    check('created the staging KV namespace', mock.state.mutations.includes('kv:steve-pay-cache-staging'));
-    check('created the staging queue', mock.state.mutations.includes('queue:steve-pay-webhooks-staging'));
+    check('created the Pages project', mock.state.mutations.includes('pages:steve-pay'));
     check(
-      'created the staging dead letter queue before its queue',
-      mock.state.mutations.indexOf('queue:steve-pay-webhooks-staging-dlq') <
-        mock.state.mutations.indexOf('queue:steve-pay-webhooks-staging'),
+      'created the queue even though its dead letter queue already existed',
+      mock.state.mutations.includes('queue:steve-pay-webhooks'),
       mock.state.mutations.join(', '),
     );
 
@@ -405,25 +414,39 @@ async function main() {
     section('the config patch writes the real ids into the right blocks');
     // -----------------------------------------------------------------------
     const configAfter = readFileSync(configPath, 'utf8');
+    const workerConfigAfter = readFileSync(workerConfigPath, 'utf8');
 
     check(
-      'no placeholders remain',
+      'no placeholders remain in the Pages config',
       !/REPLACE_WITH_[A-Z0-9_]+/.test(configAfter),
       `still present: ${(configAfter.match(/REPLACE_WITH_[A-Z0-9_]+/g) ?? []).join(', ')}`,
     );
+    check(
+      'no placeholders remain in the companion Worker config',
+      !/REPLACE_WITH_[A-Z0-9_]+/.test(workerConfigAfter),
+      `still present: ${(workerConfigAfter.match(/REPLACE_WITH_[A-Z0-9_]+/g) ?? []).join(', ')}`,
+    );
     check('kept the existing production D1 id', configAfter.includes('d1-existing-prod'));
     check('kept the existing production KV id', configAfter.includes('kv-existing-prod'));
-    check('wrote the new staging D1 id', configAfter.includes('d1-new-steve-pay-staging'));
-    check('wrote the new staging KV id', configAfter.includes('kv-new-steve-pay-cache-staging'));
-    check('resolved the workers.dev subdomain', configAfter.includes('steve-pay-staging.test-subdomain.workers.dev'));
     check(
-      'left the comments intact',
-      configAfter.includes('// Steve Pay — Cloudflare Worker deployment configuration.'),
+      'pointed both files at the same database and cache',
+      workerConfigAfter.includes('d1-existing-prod') && workerConfigAfter.includes('kv-existing-prod'),
+      'the two deploy targets would read two different databases',
+    );
+    check(
+      'left the comments intact in the Pages config',
+      configAfter.includes('// Steve Pay — Cloudflare Pages project configuration.'),
       're-serialising the config would have deleted every comment',
     );
     check(
-      'kept the custom domain routes',
-      configAfter.includes('"pattern": "steve-pay.ir"') && configAfter.includes('"custom_domain": true'),
+      'left the comments intact in the companion config',
+      workerConfigAfter.includes('// Steve Pay — companion Worker for cron'),
+      're-serialising the config would have deleted every comment',
+    );
+    check(
+      'introduced no hostname in either file',
+      !/steve-pay\.ir|"routes"|custom_domain|"BASE_URL"/.test(configAfter + workerConfigAfter),
+      'a domain or base URL appeared in a generated config',
     );
 
     // The production id appears twice on purpose — top level and `env.production` — and both
@@ -434,16 +457,17 @@ async function main() {
     // the same database. A patch that caught only the first would leave the top-level config,
     // which is what `wrangler dev` and the Vitest pool read, pointed at a placeholder.
     check(
-      'applied the production id to every occurrence',
-      productionIdCount === 2,
-      `expected 2 occurrences (top level, env.production), found ${productionIdCount}`,
+      'applied the production id to every occurrence in the Pages config',
+      productionIdCount === 1,
+      `expected 1 occurrence, found ${productionIdCount}`,
     );
+    void workerConfigAfter;
 
     // -----------------------------------------------------------------------
     section('a second run is a no-op');
     // -----------------------------------------------------------------------
     mock.state.mutations = [];
-    const second = await runSetup(directory, apiBase, ['--env', 'both', '--skip', 'migrate,secrets,deploy,admin']);
+    const second = await runSetup(directory, apiBase, ['--env', 'production', '--skip', 'migrate,secrets,deploy,admin']);
 
     check('exits 0', second.status === 0, `status ${second.status}\n${second.output}`);
     check(
@@ -453,8 +477,8 @@ async function main() {
     );
     check(
       'reports the configuration already matches',
-      second.output.includes('Configuration already matches') ||
-        second.output.includes('No placeholders left'),
+      second.output.split('already matches the provisioned resources').length - 1 >= 2,
+      'both config files should report a match',
     );
     check(
       'did not churn the config file',
@@ -465,9 +489,14 @@ async function main() {
     section('it refuses to overwrite an id it did not write');
     // -----------------------------------------------------------------------
     // Simulates a config pointed at a different database than the account holds — the case
-    // where a well-meaning re-run would silently redeploy against the wrong data.
-    const tampered = configAfter.replace(/d1-existing-prod/g, 'd1-some-other-database');
-    writeFileSync(configPath, tampered, 'utf8');
+    // where a well-meaning re-run would silently redeploy against the wrong data. Both files
+    // are tampered with, because the guard has to hold for both of them.
+    writeFileSync(configPath, configAfter.replace(/d1-existing-prod/g, 'd1-some-other-database'), 'utf8');
+    writeFileSync(
+      workerConfigPath,
+      workerConfigAfter.replace(/d1-existing-prod/g, 'd1-some-other-database'),
+      'utf8',
+    );
 
     mock.state.mutations = [];
     const mismatch = await runSetup(directory, apiBase, ['--env', 'production', '--skip', 'migrate,secrets,deploy,admin']);
@@ -488,14 +517,34 @@ async function main() {
       '--skip',
       'migrate,secrets,deploy,admin',
     ]);
-    check('applied the fix with --force-config', forced.output.includes('wrangler.jsonc updated'));
-    check('restored the correct id', !readFileSync(configPath, 'utf8').includes('d1-some-other-database'));
+    check(
+      'applied the fix with --force-config',
+      /wrangler\.jsonc \(Pages\) updated/.test(forced.output),
+      forced.output,
+    );
+    check(
+      'restored the correct id in both files',
+      !readFileSync(configPath, 'utf8').includes('d1-some-other-database') &&
+        !readFileSync(workerConfigPath, 'utf8').includes('d1-some-other-database'),
+      'a config file still points at the wrong database',
+    );
 
     // -----------------------------------------------------------------------
     section('bad input fails before touching anything');
     // -----------------------------------------------------------------------
     const badEnv = await runSetup(directory, apiBase, ['--env', 'nonsense']);
     check('rejects an unknown environment', badEnv.status === 1 && badEnv.output.includes('Invalid --env'));
+
+    // Staging used to be a second named environment. It is gone, and the failure mode that
+    // matters is not the rejection itself but where the run would otherwise have gone: a
+    // silent fallback to production would deploy staging over live data.
+    const staging = await runSetup(directory, apiBase, ['--env', 'staging']);
+    check(
+      'refuses staging rather than falling back to production',
+      staging.status === 1 && staging.output.includes('Invalid --env'),
+      staging.output,
+    );
+    check('changed nothing when refusing', mock.state.mutations.length === 0);
 
     const badPhase = await runSetup(directory, apiBase, ['--skip', 'notaphase']);
     check('rejects an unknown phase', badPhase.status === 1 && badPhase.output.includes('Unknown phase'));

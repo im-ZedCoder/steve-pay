@@ -28,6 +28,18 @@ import { AuditService } from './audit';
 import { SettingsService } from './settings';
 import type { Logger } from '../obs/logger';
 
+/**
+ * The `user-agent` a merchant's endpoint sees on every delivery.
+ *
+ * The contact URL is a courtesy so an operator debugging a callback can find out who
+ * is calling them. It is omitted rather than faked when the origin is not known — a
+ * `User-Agent` is a header a receiver may log or match on, and putting a hostname in
+ * it that does not resolve is worse than leaving the product name alone.
+ */
+function webhookUserAgent(origin: string): string {
+  return origin.length > 0 ? `StevePay-Webhooks/1.0 (+${origin})` : 'StevePay-Webhooks/1.0';
+}
+
 export const WEBHOOK_EVENTS = [
   'payment.created',
   'payment.pending',
@@ -99,7 +111,18 @@ export class WebhookService {
   private readonly settings: SettingsService;
   private readonly queue: Queue<unknown> | null;
   private readonly logger: Logger;
-  private readonly baseUrl: string;
+  /**
+   * Scheme and host to advertise in the delivery `user-agent`.
+   *
+   * May be empty: the queue consumer and the cron sweeper run without a request, and
+   * only learn the origin from the value a request recorded in KV. As a caller-supplied
+   * contact URL it degrades to a bare `StevePay-Webhooks/1.0`, which is still a valid
+   * user-agent — unlike a placeholder host, which would tell a merchant's operator to
+   * look somewhere that does not exist.
+   */
+  private readonly origin: string;
+  /** Whether outbound endpoints must be HTTPS. Set from the request that arrived. */
+  private readonly secure: boolean;
 
   constructor(deps: {
     db: D1Database;
@@ -108,7 +131,8 @@ export class WebhookService {
     settings: SettingsService;
     queue?: Queue<unknown> | null;
     logger: Logger;
-    baseUrl: string;
+    origin: string;
+    secure: boolean;
   }) {
     this.db = deps.db;
     this.rootSecret = deps.rootSecret;
@@ -116,7 +140,8 @@ export class WebhookService {
     this.settings = deps.settings;
     this.queue = deps.queue ?? null;
     this.logger = deps.logger;
-    this.baseUrl = deps.baseUrl;
+    this.origin = deps.origin;
+    this.secure = deps.secure;
   }
 
   // -------------------------------------------------------------------------
@@ -146,7 +171,7 @@ export class WebhookService {
     requestId?: string,
   ): Promise<{ endpoint: WebhookEndpointRow; secret: string }> {
     const url = validateCallbackUrl(input.url, {
-      allowInsecure: !this.baseUrl.startsWith('https://'),
+      allowInsecure: !this.secure,
     });
 
     const secret = generateWebhookSecret();
@@ -224,7 +249,7 @@ export class WebhookService {
     if (!row) throw new AppError('WEBHOOK_NOT_FOUND');
 
     const url = patch.url
-      ? validateCallbackUrl(patch.url, { allowInsecure: !this.baseUrl.startsWith('https://') })
+      ? validateCallbackUrl(patch.url, { allowInsecure: !this.secure })
       : row.url;
     const timestamp = nowIso();
 
@@ -531,7 +556,7 @@ export class WebhookService {
         signal: controller.signal,
         headers: {
           'content-type': 'application/json',
-          'user-agent': `StevePay-Webhooks/1.0 (+${this.baseUrl})`,
+          'user-agent': webhookUserAgent(this.origin),
           'x-stevepay-signature': signature,
           'x-stevepay-event': delivery.event,
           'x-stevepay-timestamp': timestamp,

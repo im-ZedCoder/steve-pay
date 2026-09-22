@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# The Cloudflare Pages output directory, assembled by scripts/build-pages.mjs. Deployed,
+# never committed: it is a copy of the bundle plus a copy of public/.
+dist-pages/
 .wrangler/
 .dev.vars
 .env

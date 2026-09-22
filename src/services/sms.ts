@@ -47,6 +47,13 @@ export interface SmsIngestInput {
   sourceIp: string | null;
   requestId: string;
   environment: 'live' | 'test';
+  /**
+   * Scheme and host of the forwarder's request.
+   *
+   * The ingestion path has no session and no browser, so this is the only way a
+   * notification triggered from here can carry a link back into the panel.
+   */
+  origin?: string;
 }
 
 export type SmsOutcome =
@@ -370,7 +377,9 @@ export class SmsService {
           payableAmount: invoice.payable_amount,
           invoiceId: invoice.id,
           reasons,
-          baseUrl: '',
+          // The SMS webhook has no session and no browser: the origin comes from the
+          // forwarder's own request, which the caller passes in.
+          origin: input.origin ?? '',
         });
       }
 
@@ -499,7 +508,7 @@ export class SmsService {
   }
 
   /** Issues a test token for the setup wizard. */
-  async issueTestToken(merchantUserId: string, baseUrl: string): Promise<{ token: string; message: string; expiresAt: string }> {
+  async issueTestToken(merchantUserId: string): Promise<{ token: string; message: string; expiresAt: string }> {
     const { randomCode } = await import('../core/crypto');
     const token = `SP-${randomCode(1, 4)}-${randomCode(1, 4)}`;
     const tokenHash = await sha256Hex(`sms-test:${token}:${merchantUserId}`);
@@ -515,7 +524,6 @@ export class SmsService {
     // A realistic-looking bank message so the merchant can paste something that
     // exercises the real forwarder path.
     const message = `STEVE_PAY_TEST ${token}\nمبلغ 1,000 تومان به حساب 6104****0000 واریز شد. شماره پیگیری 00000000`;
-    void baseUrl;
 
     await this.audit.record({
       event: 'sms.test_verified',

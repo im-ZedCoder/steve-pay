@@ -1039,7 +1039,7 @@ ${row('محیط', key.view.environment)}
       webhooks: session.services.webhooks,
       telegram: session.services.telegram,
       logger: context.logger,
-      baseUrl: context.config.baseUrl,
+      origin: context.origin,
       invoice,
       transactionId: result.transactionId,
       automatic: false,

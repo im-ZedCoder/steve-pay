@@ -29,12 +29,29 @@ import { detectVolumeAnomaly } from '../core/risk';
 import { nowIso, addMinutes, tehranDayKey, lastDayKeys } from '../core/time';
 import { all, first, run, scalar } from '../db/client';
 import { resolveConfig, resolveSecrets, type Env } from '../env';
+import { resolveOrigin } from '../core/origin';
 
 export interface ScheduledContext {
   cron: string;
   env: Env;
   ctx: ExecutionContext;
   logger: Logger;
+}
+
+/**
+ * Origin and TLS state for a job that has no request to read.
+ *
+ * The origin is whatever the last request recorded, so a job that runs minutes after
+the first page view knows where the platform lives without anyone configuring it.
+ *
+ * `secure` falls back to the environment name when nothing has been recorded, because
+ * an unknown origin is not evidence that the deployment is a sandbox: claiming it is
+ * would relax the HTTPS requirement on merchant callback URLs at exactly the moment we
+ * know least.
+ */
+async function backgroundOrigin(env: Env): Promise<{ origin: string; secure: boolean }> {
+  const origin = await resolveOrigin(env);
+  return { origin, secure: origin.length > 0 ? origin.startsWith('https://') : resolveConfig(env).isProduction };
 }
 
 interface JobResult {
@@ -118,13 +135,15 @@ const expireInvoicesJob: Job = {
     const settings = new SettingsService(env.DB);
     const audit = new AuditService(env.DB);
     const wallet = new WalletService(env.DB);
+    const { origin, secure } = await backgroundOrigin(env);
     const invoices = new InvoiceService({
       db: env.DB,
       settings,
       audit,
       wallet,
       cards: new CardService(env.DB, audit, settings),
-      baseUrl: resolveConfig(env).baseUrl,
+      origin,
+      secure,
     });
 
     const result = await invoices.expireDue(300);
@@ -138,7 +157,7 @@ const webhookSweepJob: Job = {
   name: 'webhook-sweep',
   async run({ env, logger }) {
     const secrets = resolveSecrets(env);
-    const config = resolveConfig(env);
+    const { origin, secure } = await backgroundOrigin(env);
     const audit = new AuditService(env.DB);
     const settings = new SettingsService(env.DB);
     const webhooks = new WebhookService({
@@ -148,7 +167,8 @@ const webhookSweepJob: Job = {
       settings,
       queue: null,
       logger,
-      baseUrl: config.baseUrl,
+      origin,
+      secure,
     });
 
     const due = await webhooks.dueDeliveries(25);

@@ -40,6 +40,14 @@ export interface ShellOptions {
   script?: boolean;
   /** Canonical path, used for the nav's aria-current. */
   currentPath?: string;
+  /**
+   * Scheme and host of the request, e.g. `https://pay.example.com`.
+   *
+   * Only the footer uses it, to name the address the reader is actually on rather than
+   * a domain written into the source. Optional so that a page rendered with no request
+   * to read — and the tests that render one — still produce complete markup.
+   */
+  origin?: string;
   noindex?: boolean;
   /** Meta description. Only worth setting on the pages meant to be indexed. */
   description?: string;
@@ -51,6 +59,17 @@ export interface ShellOptions {
    * on a wrapper. Appended last, so a page rule wins over the shared rule it refines.
    */
   extraCss?: string;
+  /**
+   * Emit the drifting aurora layer behind the page.
+   *
+   * On for the surfaces someone reads — landing, docs, sign-in — and off everywhere
+   * else. It is one fixed layer holding two blurred, drifting blobs, which is the nice
+   * half of the background and also the half that costs GPU time; the payment page and
+   * the consoles cover the ground with an opaque surface anyway, so neither gains
+   * anything from paying for it. Both still get the static half (a radial ground and a
+   * single still bloom), which is drawn by body pseudo-elements with no extra DOM.
+   */
+  aurora?: boolean;
 }
 
 export function shell(options: ShellOptions, body: string): string {
@@ -61,7 +80,7 @@ export function shell(options: ShellOptions, body: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#04060E">
+<meta name="theme-color" content="#05070D">
 <title>${escapeHtml(options.title)}</title>
 ${options.description ? `<meta name="description" content="${escapeHtml(options.description)}">` : ''}
 ${options.noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}
@@ -71,6 +90,7 @@ ${options.description ? `<meta property="og:description" content="${escapeHtml(o
 <style>${css}${options.extraCss ?? ''}</style>
 </head>
 <body${options.bodyClass ? ` class="${escapeHtml(options.bodyClass)}"` : ''}>
+${options.aurora ? '<div class="bg-aurora" aria-hidden="true"><i></i><i></i></div>' : ''}
 ${body}
 ${options.script === false ? '' : '<script src="/assets/client.js" defer></script>'}
 </body>
@@ -82,14 +102,19 @@ ${options.script === false ? '' : '<script src="/assets/client.js" defer></scrip
 // ---------------------------------------------------------------------------
 
 /**
- * A section's mono label.
+ * A section label.
  *
- * The single structural device of this interface: a wide-tracked Latin label that
- * marks where machine vocabulary ends and human language begins. Used above every
- * headed region, which is what keeps the pages reading as one instrument.
+ * A wide-tracked label above a heading, marking where the region starts. It is a div, not
+ * a paragraph, and that is load-bearing rather than cosmetic: the three places it appears
+ * most — the operator page header, a band head, and the docs head — all style their own
+ * paragraphs with a type-based descendant rule (.top p, .band-head p, .docs-head p). Those
+ * are specificity 0-1-1 against .eyebrow's 0-1-0, so as a paragraph the label silently lost
+ * its colour, size and weight to the body-copy rule of whichever container it sat in, and
+ * the one device that is supposed to mark a section read as ordinary text. A div cannot be
+ * reached by a p rule, which removes the collision at all four sites at once.
  */
 export function eyebrow(text: string): string {
-  return `<p class="eyebrow">${escapeHtml(text)}</p>`;
+  return `<div class="eyebrow">${escapeHtml(text)}</div>`;
 }
 
 export function trace(live = false): string {
@@ -101,28 +126,56 @@ const SITE_LINKS: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'پنل پذیرنده' },
 ];
 
-/** Public chrome: the sticky top bar shared by the landing page and the docs. */
+/**
+ * Public chrome: the sticky top bar shared by the landing page and the docs.
+ *
+ * The bar floats rather than spanning the viewport: the sticky element is a plain
+ * positioning frame and the glass panel inside it is capped to the page measure, so the
+ * header lines up with the content column instead of running to the window edges.
+ */
 export function siteHeader(currentPath: string): string {
   const links = SITE_LINKS.map(
     (link) =>
       `<a href="${escapeHtml(link.href)}"${currentPath.startsWith(link.href) ? ' aria-current="page"' : ''}>${escapeHtml(link.label)}</a>`,
   ).join('');
 
-  return `<nav class="site-nav" aria-label="ناوبری اصلی">
-  <a class="site-brand" href="/"><i aria-hidden="true"></i><span>STEVE PAY<em class="sr"> </em></span></a>
-  <div class="site-links">
-    ${links}
-    <a class="btn" href="/login">ورود</a>
-    <a class="btn btn-primary" href="/register">ساخت حساب</a>
-  </div>
-</nav>`;
+  return `<header class="site-nav">
+  <nav class="site-nav-inner" aria-label="ناوبری اصلی">
+    <a class="site-brand" href="/"><span class="brand-tile" aria-hidden="true">S</span>Steve Pay</a>
+    <div class="site-links">
+      ${links}
+      <a class="btn" href="/login">ورود</a>
+      <a class="btn btn-primary" href="/register">ساخت حساب</a>
+    </div>
+  </nav>
+</header>`;
 }
 
-export function siteFooter(): string {
+/**
+ * The footer's address line.
+ *
+ * Shows the host the visitor is on. It is a display of where they are, not a configured
+ * value, so it is correct on a preview URL and on the custom domain at once, and there is
+ * no domain in the source for anyone to update. With no origin the line is omitted rather
+ * than filled with a placeholder.
+ */
+function footerHost(origin: string | undefined): string {
+  if (!origin) return '';
+  try {
+    return `<span>${escapeHtml(new URL(origin).host)}</span>`;
+  } catch {
+    return '';
+  }
+}
+
+export function siteFooter(origin?: string): string {
+  const host = footerHost(origin);
   return `<footer class="site-foot">
   <div class="site-foot-inner">
     <div>
-      <div class="site-brand" style="margin-bottom:.5rem"><i aria-hidden="true"></i><span>STEVE PAY</span></div>
+      <a class="site-brand" href="/" style="margin-bottom:.5rem">
+        <span class="brand-tile" aria-hidden="true">S</span>Steve Pay
+      </a>
       <div>درگاه پرداخت کارتی با تأیید خودکار از روی پیامک بانک.</div>
     </div>
     <div style="display:grid;gap:.4rem">
@@ -132,20 +185,28 @@ export function siteFooter(): string {
       <a href="/login?scope=admin">ورود مدیران</a>
     </div>
     <div style="display:grid;gap:.4rem">
-      <span>steve-pay.ir</span>
+      ${host}
       <span>${escapeHtml(new Date().getFullYear().toString())}</span>
     </div>
   </div>
 </footer>`;
 }
 
-/** A complete public page: header, content, footer. */
+/**
+ * A complete public page: header, content, footer.
+ *
+ * aurora is resolved with a default rather than placed before the spread. Object spread
+ * copies an explicit `undefined` over the earlier value, so a caller that simply does not
+ * mention `aurora` — which is every caller — would switch the drifting layer off for the
+ * whole public site, and the page would look correct in every respect except the one nobody
+ * would think to check.
+ */
 export function publicShell(options: ShellOptions, body: string): string {
   return shell(
-    { css: 'app', ...options },
+    { ...options, css: 'app', aurora: options.aurora ?? true },
     `${siteHeader(options.currentPath ?? '')}
 ${body}
-${siteFooter()}`,
+${siteFooter(options.origin)}`,
   );
 }
 
@@ -231,7 +292,7 @@ function pageHeader(options: {
     <h1>${escapeHtml(options.heading)}</h1>
     ${options.subheading ? `<p>${escapeHtml(options.subheading)}</p>` : ''}
   </div>
-  ${options.actions ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">${options.actions}</div>` : ''}
+  ${options.actions ? `<div class="top-actions">${options.actions}</div>` : ''}
 </header>
 ${trace(true)}`;
 }
@@ -253,10 +314,11 @@ export function dashboardShell(
 
   return shell(
     { ...options, css: 'app' },
-    `<div class="shell">
+    `<div class="shell adm-root">
 <nav class="nav" aria-label="ناوبری پنل پذیرنده">
   <div class="nav-top">
-    <div class="nav-brand"><i aria-hidden="true"></i>
+    <div class="nav-brand">
+      <span class="brand-tile" aria-hidden="true">S</span>
       <div><b>Steve Pay</b><span>پنل پذیرنده</span></div>
     </div>
     ${navAccount({ place: 'bar', user: options.user, unreadCount: options.unreadCount })}
@@ -292,10 +354,11 @@ export function adminShell(
 
   return shell(
     { ...options, css: 'app' },
-    `<div class="shell">
+    `<div class="shell adm-root">
 <nav class="nav" aria-label="ناوبری مدیریت">
   <div class="nav-top">
-    <div class="nav-brand"><i aria-hidden="true"></i>
+    <div class="nav-brand">
+      <span class="brand-tile" aria-hidden="true">S</span>
       <div><b>Steve Pay</b><span>کنسول مدیریت</span></div>
     </div>
     ${navAccount({ place: 'bar', user: options.user, pendingReview: options.pendingReview })}
@@ -589,9 +652,9 @@ export function stepList(items: Array<{ title: string; body: string }>): string 
  */
 export function codeBlock(options: { label: string; note?: string; html: string }): string {
   return `<div class="code">
-<div class="code-bar">${escapeHtml(options.label)}${
+<div class="code-bar"><span>${escapeHtml(options.label)}</span>${
     options.note ? `<b>${escapeHtml(options.note)}</b>` : ''
-  }</div>
+  }<button class="code-copy" type="button" data-copy-code data-copy-label>کپی</button></div>
 <pre class="code-body">${options.html}</pre>
 </div>`;
 }

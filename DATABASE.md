@@ -186,7 +186,6 @@ are inseparable.
 
 ```bash
 npm run db:migrate:local      # local
-npm run db:migrate:staging    # staging (remote)
 npm run db:migrate:remote     # production (remote)
 npm run db:seed:local
 ```

@@ -35,11 +35,11 @@ two units cannot be silently interchanged.
 
 | Concern | Choice | Why |
 |---|---|---|
-| Runtime | Cloudflare Workers | Edge latency, no VPS to run |
+| Runtime | Cloudflare Pages (Functions) | Edge latency, no VPS to run, and a deployment the hostname does not have to be known for |
 | HTTP | Hono | Tiny, typed router; no framework runtime on the client |
 | Database | Cloudflare D1 (SQLite) | Real ACID transactions and real unique indexes |
 | Queue | Cloudflare Queues | Webhook delivery must not block confirmation |
-| Cron | Cloudflare Triggers | Expiry, retries, reconciliation, cleanup |
+| Cron | Cloudflare Triggers, in a companion Worker | Pages Functions are HTTP-only: no `scheduled()` handler, no queue consumer. Expiry, retries, reconciliation and cleanup run in `wrangler.worker.jsonc` against the same database |
 | Frontend | Server-rendered HTML + ~3 KB of vanilla JS | The payment page is opened on a phone with a poor connection |
 | Tests | Vitest + Workers pool | Tests run in workerd against real D1, not against mocks |
 | Validation | Zod | Used where a schema is genuinely declarative |
@@ -122,7 +122,7 @@ Then open <http://localhost:8787>.
 npm run typecheck    # tsc --noEmit, strict
 npm run lint         # eslint
 npm test             # vitest, real workerd + real D1
-npm run build        # wrangler deploy --dry-run
+npm run build        # fonts + assets + bundle → dist-pages/
 npm run check        # all four
 ```
 
@@ -137,14 +137,15 @@ node scripts/verify-schema.mjs   # proves the 30 financial invariants hold
 ```bash
 npm run cf:setup -- --help                 # what it provisions, and the token permissions
 npm run cf:setup -- --dry-run              # report, change nothing
-npm run cf:setup -- --env both --yes       # do all of it
+npm run cf:setup -- --env production --yes # do all of it
 npm run cf:setup:test                      # verify the script against a mock API
 ```
 
-One command creates the D1 databases, KV namespaces and queues, writes their ids into
-`wrangler.jsonc`, applies migrations and seeds, generates and pushes the secrets, deploys, and
-bootstraps the first admin. It is idempotent and never deletes anything. See
-[DEPLOYMENT.md](./DEPLOYMENT.md#fast-path-one-command).
+One command creates the D1 database, the KV namespace, the queues and the Pages project, writes
+their ids into `wrangler.jsonc` and `wrangler.worker.jsonc`, applies migrations and seeds,
+generates and pushes the secrets to both, deploys the site and then the companion Worker, and
+bootstraps the first admin. It is idempotent and never deletes anything. Nothing in it names a
+hostname: see [DEPLOYMENT.md](./DEPLOYMENT.md#fast-path-one-command).
 
 ---
 
@@ -167,7 +168,7 @@ closed rather than falling back to a development value.
 | [API.md](./API.md) | Every endpoint, request, response and error code |
 | [DATABASE.md](./DATABASE.md) | Schema, indexes, triggers and invariants |
 | [SECURITY.md](./SECURITY.md) | Threat model and controls |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Cloudflare setup, secrets, migrations, domains |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | The two Cloudflare projects, secrets, migrations, custom domains |
 | [SMS_PARSERS.md](./SMS_PARSERS.md) | How bank messages are parsed and how to add a parser |
 | [WEBHOOKS.md](./WEBHOOKS.md) | Callback format, HMAC verification, retries |
 | [TESTING.md](./TESTING.md) | What is tested and how to run it |
@@ -192,7 +193,10 @@ src/
 migrations/      SQL, applied by wrangler d1 migrations
 seeds/           settings seed
 tests/           Vitest suites (run inside workerd)
-scripts/         font sync, asset build, schema verification
+scripts/         font sync, asset build, Pages assembly, Cloudflare provisioning
+wrangler.jsonc   the Pages project — bindings, and no hostname of any kind
+wrangler.worker.jsonc  the companion Worker — cron triggers and the queue consumer
+dist-pages/      build output (git-ignored); what `wrangler pages deploy` uploads
 ```
 
 **Conventions**

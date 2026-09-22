@@ -47,7 +47,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
       throw new AppError('REGISTRATION_DISABLED');
     }
 
-    const csrf = await issueCsrf(context.config.isProduction);
+    const csrf = await issueCsrf(context.secure);
     const response = html(
       addCsrf(registerPage({ turnstileSiteKey: context.config.turnstileSiteKey }), csrf.token),
       {
@@ -90,7 +90,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
     if (context.config.turnstileSiteKey !== '') {
       const verified = await services.turnstile.verify(formValue(body, 'cf-turnstile-response'), context.clientIp);
       if (!verified.success) {
-        const csrf = await issueCsrf(context.config.isProduction);
+        const csrf = await issueCsrf(context.secure);
         const response = html(
           addCsrf(
             registerPage({
@@ -135,7 +135,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
     } catch (error) {
       // Re-render the form with what they typed. Losing a half-completed form because one
       // field was rejected is the kind of thing that makes people abandon a signup.
-      const csrf = await issueCsrf(context.config.isProduction);
+      const csrf = await issueCsrf(context.secure);
       const response = html(
         addCsrf(
           registerPage({
@@ -161,7 +161,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
   app.get('/login', async (c) => {
     const context = c.get('appContext');
     const admin = c.req.query('scope') === 'admin';
-    const csrf = await issueCsrf(context.config.isProduction);
+    const csrf = await issueCsrf(context.secure);
 
     // `next` is validated here as well as on POST.
     //
@@ -215,11 +215,16 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
       const response = redirect(destination);
       response.headers.append(
         'set-cookie',
-        sessionCookie(result.token, ttlHours * 3600, context.config.isProduction),
+        // `context.secure` is the connection, not the environment name. Marking the
+        // cookie `Secure` on a plain-HTTP origin does not warn — the browser drops it
+        // silently, and the merchant sees a correct password return them to the login
+        // page with no error anywhere. A deployment that is genuinely on HTTPS still
+        // gets the flag, so the protection is unchanged where it matters.
+        sessionCookie(result.token, ttlHours * 3600, context.secure),
       );
       return response;
     } catch (error) {
-      const csrf = await issueCsrf(context.config.isProduction);
+      const csrf = await issueCsrf(context.secure);
       const response = html(
         addCsrf(
           loginPage({

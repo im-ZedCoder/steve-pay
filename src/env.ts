@@ -1,8 +1,9 @@
 /**
  * Worker environment.
  *
- * Bindings come from wrangler.jsonc; secrets come from `wrangler secret put` in
- * staging and production, and from `.dev.vars` locally.
+ * Bindings come from wrangler.jsonc; in production the secrets are pushed to the Pages
+ * project and the companion Worker by `npm run cf:setup`, and locally they come from
+ * `.dev.vars`.
  *
  * `resolveSecrets` is the important part of this module. A payments platform that
  * silently falls back to a development default for its session key in production
@@ -25,16 +26,25 @@ export interface WebhookQueueMessage {
 export interface Env {
   // --- bindings -------------------------------------------------------------
   DB: D1Database;
-  /** Eventual-consistency cache only. Never used for correctness decisions. */
+  /**
+   * Eventual-consistency cache only. Never used for correctness decisions.
+   *
+   * Also holds the platform's own origin, which is the one thing a background job needs
+   * and cannot derive — see `core/origin.ts`.
+   */
   CACHE: KVNamespace;
-  /** Static bytes: CSS and self-hosted fonts. */
-  ASSETS: Fetcher;
-  /** Absent in local development when the queue is not running; delivery falls back to waitUntil. */
+  /**
+   * Webhook delivery queue.
+   *
+   * Optional on purpose. The Pages project binds it as a producer; the companion Worker
+   * owns the consumer. When the binding is absent — local development, tests, or a
+   * deployment that has not created the queue yet — delivery falls back to the caller's
+   * `waitUntil`, so webhooks still go out and only the durable retry is lost.
+   */
   WEBHOOK_QUEUE?: Queue<WebhookQueueMessage>;
 
   // --- non-secret vars (wrangler.jsonc `vars`) ------------------------------
   ENVIRONMENT?: string;
-  BASE_URL?: string;
   GATEWAY_FEE_TOMAN?: string;
   UNIQUE_SUFFIX_DIGITS?: string;
   TURNSTILE_SITE_KEY?: string;
@@ -61,7 +71,6 @@ export type Environment = 'development' | 'staging' | 'production';
 export interface RuntimeConfig {
   environment: Environment;
   isProduction: boolean;
-  baseUrl: string;
   /** Default gateway fee from vars; the settings table can override it. */
   defaultGatewayFeeToman: number;
   defaultSuffixDigits: 3 | 4;
@@ -123,7 +132,7 @@ export function resolveSecrets(env: Env): ResolvedSecrets {
     // Fail closed and name the missing secrets. The error is deliberately not
     // "public": it must never render on a page.
     throw new AppError('INTERNAL_ERROR', {
-      message: `Missing required secrets in production: ${missing.join(', ')}. Set them with \`wrangler secret put <NAME> --env production\`.`,
+      message: `Missing required secrets in production: ${missing.join(', ')}. Set them with \`npm run cf:setup -- --only secrets\`, or by hand with \`wrangler pages secret put <NAME> --project-name steve-pay\` and \`wrangler secret put <NAME> -c wrangler.worker.jsonc\`.`,
       details: { missing },
     });
   }
@@ -155,9 +164,9 @@ export function resolveConfig(env: Env): RuntimeConfig {
   return {
     environment,
     isProduction: environment === 'production',
-    // A trailing slash would produce "https://host//pay/inv_..." in callbacks, so
-    // it is stripped once here rather than at every concatenation site.
-    baseUrl: (env.BASE_URL ?? 'http://localhost:8787').replace(/\/+$/, ''),
+    // No `baseUrl` here on purpose. The platform's own origin is read from the request
+    // being served — see `core/origin.ts` — so there is no host to configure and no way
+    // for a deployment to advertise a domain it is not actually reachable on.
     defaultGatewayFeeToman: Number.isFinite(fee) && fee >= 0 ? Math.floor(fee) : 3000,
     defaultSuffixDigits: digits === 3 ? 3 : 4,
     turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? '',

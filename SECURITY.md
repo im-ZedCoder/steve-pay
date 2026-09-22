@@ -196,8 +196,11 @@ Two notes:
   render-blocking round trip. `script-src` does **not**, and that is the one that matters.
 - `frame-ancestors 'none'` blocks clickjacking, which is specifically relevant here: a payment page
   is a high-value target for an overlay attack that rewrites the visible amount.
-- HSTS is only sent in production. On `localhost` or `*.workers.dev` it would break local
-  development for two years in a way that is very hard to diagnose.
+- HSTS is sent only when both hold: the deployment is production **and** the request arrived
+  over TLS. On `localhost`, or on a `*.pages.dev` preview, it would break plain-HTTP requests
+  to that host for two years in a way that is very hard to diagnose. The protocol is read from
+  the request rather than assumed from the environment name, because a deployment labelled
+  production but reached over plain HTTP is exactly the case that breaks login.
 
 ---
 

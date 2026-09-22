@@ -1,0 +1,95 @@
+{
+  // Steve Pay — companion **Worker** for the three surfaces Cloudflare Pages cannot run.
+  //
+  // Pages Functions support HTTP only. They have no `scheduled()` handler and cannot be a
+  // queue consumer, and this platform depends on both:
+  //
+  //   1. Expiring overdue invoices. Load-bearing: an invoice that never expires keeps its
+  //      unique payable amount claimed by a partial unique index, and enough unexpired
+  //      invoices exhaust the suffix space and stop new payments from being created.
+  //   2. Sweeping webhook deliveries whose backoff has elapsed, so a merchant endpoint
+  //      that was down for ten minutes still receives its callbacks.
+  //   3. Nightly rollups, wallet reconciliation, cleanup and the security scan.
+  //
+  // So the web application is a Pages project (`wrangler.jsonc`) and this is a Worker that
+  // does nothing but run on a schedule and drain the queue. It binds the same D1 and KV as
+  // the Pages project — one dataset, two readers.
+  //
+  // `workers_dev` is false and there is no `routes` block, so this Worker has no public
+  // address at all. Its `fetch` handler exists because the entry point is shared, but
+  // nothing can reach it; the public HTTP surface is the Pages project.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "steve-pay-jobs",
+
+  // The same entry point as the application. Reusing it rather than writing a second
+  // module means the cron jobs, the queue consumer and the routes all run the identical
+  // service wiring — there is no second object graph that can drift from the first.
+  "main": "src/index.ts",
+  "workers_dev": false,
+
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "minify": true,
+
+  // Static bytes, declared here for local development only.
+  //
+  // `wrangler dev` needs one config file, and this is the one with a `main` — so this is what
+  // `npm run dev` uses. Without it the fonts and the client script would 404 in development,
+  // which is not a cosmetic problem: the payment page would render in fallback typefaces and
+  // the copy buttons would do nothing, and neither failure says why.
+  //
+  // Note there is no `binding`: nothing in the code reads these through `env.ASSETS` any
+  // more. On Pages the platform serves them before the Function is invoked, and `_headers`
+  // in `public/` carries their cache and security policy. The files ride along on the
+  // companion Worker's deploy as a side effect; they are unreachable there, because it has
+  // no route.
+  "assets": { "directory": "public" },
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "steve-pay",
+      "database_id": "98a5bae2-430f-4a9f-a1b4-2fab51179761",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  "kv_namespaces": [{ "binding": "CACHE", "id": "0a952c56526d403b90281ccbe8a1ace6" }],
+
+  "queues": {
+    "producers": [{ "binding": "WEBHOOK_QUEUE", "queue": "steve-pay-webhooks" }],
+    "consumers": [
+      {
+        "queue": "steve-pay-webhooks",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "max_concurrency": 4,
+        "dead_letter_queue": "steve-pay-webhooks-dlq",
+      },
+    ],
+  },
+
+  "triggers": {
+    "crons": [
+      // Every 2 minutes: expire overdue invoices, sweep due webhook retries.
+      "*/2 * * * *",
+      // Every 15 minutes: reconcile wallets, warn on low balances.
+      "*/15 * * * *",
+      // Daily 03:00 UTC: roll up metrics, prune telemetry, run the security scan.
+      "0 3 * * *",
+    ],
+  },
+
+  "vars": {
+    "ENVIRONMENT": "production",
+    "GATEWAY_FEE_TOMAN": "3000",
+    "UNIQUE_SUFFIX_DIGITS": "4",
+    "TURNSTILE_SITE_KEY": "",
+  },
+}

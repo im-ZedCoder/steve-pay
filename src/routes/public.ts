@@ -52,7 +52,7 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
     const context = c.get('appContext');
     // Cacheable: this page is identical for every visitor and contains no data. Letting
     // a shared cache hold it briefly means a traffic spike does not become a Worker spike.
-    return html(landingPage({ baseUrl: context.config.baseUrl }), {
+    return html(landingPage({ origin: context.origin }), {
       headers: { 'cache-control': 'public, max-age=300' },
     });
   });
@@ -65,8 +65,15 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
   // the reference before they have a key. Served on two paths because `/docs` is what
   // the navigation links to and `/docs/api` is the older address that is already in
   // bookmarks and in `robots.txt`.
-  const docs = (): Response =>
-    html(docsPage(), { headers: { 'cache-control': 'public, max-age=300' } });
+  //
+  // The origin is passed in rather than baked in: every example on the page shows the
+  // host the reader is actually on, so documentation copied out of the browser is
+  // correct on a preview URL, on `*.pages.dev`, and on the custom domain, with no
+  // placeholder for the reader to find and replace.
+  const docs = (c: RouteContext): Response =>
+    html(docsPage({ origin: c.get('appContext').origin }), {
+      headers: { 'cache-control': 'public, max-age=300' },
+    });
 
   app.get('/docs', docs);
   app.get('/docs/api', docs);
